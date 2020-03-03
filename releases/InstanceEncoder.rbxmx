@@ -1,0 +1,4546 @@
+<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4">
+	<Meta name="ExplicitAutoJoints">true</Meta>
+	<External>null</External>
+	<External>nil</External>
+	<Item class="ModuleScript" referent="RBXEC3BD02B5C8E433291F24508C2A03EE4">
+		<Properties>
+			<BinaryString name="AttributesSerialize"></BinaryString>
+			<Content name="LinkedSource"><null></null></Content>
+			<string name="Name">InstanceEncoder</string>
+			<string name="ScriptGuid">{1EEA18AC-F35C-452C-8A58-4ABF8BBF9662}</string>
+			<ProtectedString name="Source"><![CDATA[local BitBuffer = require(script.BitBuffer)
+local BitEncodeInstance = require(script.BitEncodeInstance)
+
+local InstanceEncoder = {}
+
+--[[**
+	Encodes an Instance and its descendants into a Base64 string.
+
+	@param {t:Instance} Instance The Instance you are encoding.
+	@returns {t:string} The Base64 encoded string that represents the Instance and its descendants.
+**--]]
+function InstanceEncoder.Encode(Instance)
+	local Buffer = BitBuffer.new()
+	BitEncodeInstance.Write(Buffer, Instance)
+	return Buffer:ToBase64()
+end
+
+--[[**
+	Encodes an Instance and its descendants into a Base128 string.
+
+	@param {t:Instance} Instance The Instance you are encoding.
+	@returns {t:string} The Base128 encoded string that represents the Instance and its descendants.
+**--]]
+function InstanceEncoder.Encode128(Instance)
+	local Buffer = BitBuffer.new()
+	BitEncodeInstance.Write(Buffer, Instance)
+	return Buffer:ToBase128()
+end
+
+--[[**
+	Decodes a Base64 string that was returned from the `InstanceEncoder.Encode` function and creates an Instance from it.
+
+	@param {t:string} Base64 The Base64 string returned from calling `InstanceEncoder.Encode`.
+	@returns {t:Instance} The Instance that was encoded.
+**--]]
+function InstanceEncoder.Decode(Base64)
+	local Buffer = BitBuffer.new()
+	Buffer:FromBase64(Base64)
+	return BitEncodeInstance.Read(Buffer)
+end
+
+--[[**
+	Decodes a Base128 string that was returned from the `InstanceEncoder.Encode128` function and creates an Instance from it.
+
+	@param {t:string} Base128 The Base128 string returned from calling `InstanceEncoder.Encode128`.
+	@returns {t:Instance} The Instance that was encoded.
+**--]]
+function InstanceEncoder.Decode128(Base128)
+	local Buffer = BitBuffer.new()
+	Buffer:FromBase128(Base128)
+	return BitEncodeInstance.Read(Buffer)
+end
+
+return InstanceEncoder]]></ProtectedString>
+			<BinaryString name="Tags"></BinaryString>
+		</Properties>
+		<Item class="ModuleScript" referent="RBX18A0726CA83A4B57AE1B0EA3DE913112">
+			<Properties>
+				<BinaryString name="AttributesSerialize"></BinaryString>
+				<Content name="LinkedSource"><null></null></Content>
+				<string name="Name">BitEncodeInstance</string>
+				<string name="ScriptGuid">{D040E9E3-E432-46DC-85F2-B609BFF56303}</string>
+				<ProtectedString name="Source"><![CDATA[local Generators = require(script.Parent.Generators)
+local MDClass = Generators.GenerateMDClass()
+local MDEnum = Generators.GenerateMDEnum()
+
+-- To-do: Make this work!
+-- Issue: The generated stuff seems to be missing classes? I don't know.
+
+local BitEncodeInstance = {}
+local CachedMDClass = {}
+
+local ipairs = ipairs
+local next = next
+
+local IgnorePropertySet = {
+	["BasePart::BrickColor"] = true;
+}
+
+local TypeAlias = {
+	Content = "string";
+	ProtectedString = "string";
+}
+
+local IdToClass = {}
+local ClassIdWidth, ClassIdWidthWidth
+
+do
+	local ClassId = 0
+	for _, Class in next, MDClass do
+		Class.Id = ClassId
+		IdToClass[ClassId] = Class
+		ClassId = ClassId + 1
+
+		local PropertyId = 0
+		local PropertyList = {}
+		for _, Property in next, Class.PropertyMap do
+			Property.Id = PropertyId
+			PropertyId = PropertyId + 1
+			PropertyList[PropertyId] = Property
+		end
+
+		local PropertyIdBits = math.ceil(math.log(PropertyId + 1) / 0.69314718055995)
+		Class.PropertyList = PropertyList
+		for _, Property in next, Class.PropertyMap do
+			Property.IdWidth = PropertyIdBits
+		end
+	end
+
+	ClassIdWidth = math.ceil(math.log(ClassId + 1) / 0.69314718055995)
+	ClassIdWidthWidth = math.ceil(math.log(ClassIdWidth + 1) / 0.69314718055995)
+end
+
+do
+	for _, Enumeration in next, MDEnum do
+		local IdGen = 0
+		local ValueToId = {}
+		local ValueArray = {}
+
+		for Value in next, Enumeration.ValueMap do
+			local RobloxValue = Enum[Enumeration.EnumName][Value]
+			ValueToId[RobloxValue] = IdGen
+			IdGen = IdGen + 1
+			ValueArray[IdGen] = RobloxValue
+		end
+
+		Enumeration.ValueToId = ValueToId
+		Enumeration.ValueArray = ValueArray
+		Enumeration.BitWidth = math.ceil(math.log((IdGen - 1) + 1) / 0.69314718055995)
+	end
+end
+
+local DEFAULT_TABLE = {
+	PropertyMap = {Name = {Writeonly = true, Security = "PluginSecurity"}};
+}
+
+local function GetPropertyList(ClassName)
+	local Properties = CachedMDClass[ClassName]
+	if not Properties then
+		Properties = {}
+		local Length = 0
+		local MdClass = MDClass[ClassName]
+
+		if not MdClass then
+			MdClass = DEFAULT_TABLE
+--			print(ClassName, "is lacking!")
+		end
+
+		for _, Property in next, MdClass.PropertyMap do
+			if not Property.Writeonly and not Property.Readonly and Property.Security ~= "PluginSecurity" then
+				local PropertyName = Property.PropertyName
+				local PropertyType = Property.PropertyType
+
+				local PropertyData = {
+					Name = PropertyName;
+					Type = TypeAlias[PropertyType] or PropertyType;
+					NSName = MdClass.ClassName .. "::" .. PropertyName;
+					Property = Property;
+					PropertyId = Property.Id;
+					PropertyIdWidth = Property.IdWidth;
+					Class = MdClass;
+					ClassId = MdClass.Id;
+					InstanceCount = 0;
+				}
+
+				if not IgnorePropertySet[PropertyData.NSName] then
+					Length = Length + 1
+					Properties[Length] = PropertyData
+				end
+			end
+		end
+
+		local BaseMDClass = MdClass.BaseClassName
+		if BaseMDClass then
+			for _, Property in ipairs(GetPropertyList(BaseMDClass)) do
+				Length = Length + 1
+				Properties[Length] = Property
+			end
+		end
+
+		CachedMDClass[ClassName] = Properties
+	end
+
+	return Properties
+end
+
+local HashValueLookup = {
+	string = function(Value)
+		return "s_" .. Value
+	end;
+
+	float = function(Value)
+		return "f_" .. Value
+	end;
+
+	double = function(Value)
+		return "d_" .. Value
+	end;
+
+	int = function(Value)
+		return "i_" .. Value
+	end;
+
+	bool = function(Value)
+		return "b_" .. tostring(Value)
+	end;
+
+	Vector3 = function(Value)
+		return "V_" .. tostring(Value)
+	end;
+
+	Vector2 = function(Value)
+		return "2_" .. tostring(Value)
+	end;
+
+	CFrame = function(Value)
+		return "C_" .. tostring(Value)
+	end;
+
+	UDim2 = function(Value)
+		return "U_" .. tostring(Value)
+	end;
+
+	BrickColor = function(Value)
+		return "B_" .. tostring(Value)
+	end;
+
+	Color3 = function(Value)
+		return "H_" .. tostring(Value)
+	end;
+}
+
+local function HashValue(Value, Type, IdGenerator)
+	if MDEnum[Type] then
+		return "E_" .. tostring(Value)
+	elseif Type == "Object" then
+		local Id = IdGenerator(Value)
+		if Id then
+			return "I_" .. Id
+		else
+			return "<<NIL>>"
+		end
+	else
+		local Function = HashValueLookup[Type]
+		assert(Function, "Bad type: " .. Type)
+		return Function(Value)
+	end
+end
+
+local function ValueListSort(A, B)
+	return #A.ObjectList > #B.ObjectList
+end
+
+function BitEncodeInstance.Write(Buffer, Model)
+	CachedMDClass = {}
+	local Descendants = Model:GetDescendants()
+	local Length = #Descendants
+	local InstancesToIgnore = {}
+
+	do
+		local Index = 1
+		while Index <= Length do
+			local Descendant = Descendants[Index]
+			print(Descendant.ClassName)
+			if MDClass[Descendant.ClassName].Creatable then
+				Index = Index + 1
+			else
+				Descendants[Index] = Descendants[Length]
+				Descendants[Length] = nil
+				Length = Length - 1
+				InstancesToIgnore[Descendant] = true
+			end
+		end
+	end
+
+	local InstanceIdGenerator = 1
+	local InstanceToId = {}
+	local function GenerateId(Object)
+		if Object and Object:IsDescendantOf(Model) then
+			local Id = InstanceToId[Object]
+			if not Id then
+				Id = InstanceIdGenerator
+				InstanceIdGenerator = InstanceIdGenerator + 1
+				InstanceToId[Object] = Id
+			end
+
+			return Id
+		else
+			return 0
+		end
+	end
+
+	local AllPropertyValueBucket = {}
+	local function AddValue(Object, Property, Value)
+		if Value == nil then
+			assert(Property.Type == "Object", "Nil Value for non-Instance type `" .. Property.Type .. "`")
+		end
+
+		local PropertyData = AllPropertyValueBucket[Property.NSName]
+		if not PropertyData then
+			PropertyData = {
+				Property = Property;
+				ValueMap = {};
+				InstanceCount = 0;
+			}
+
+			AllPropertyValueBucket[Property.NSName] = PropertyData
+		end
+
+		PropertyData.InstanceCount = PropertyData.InstanceCount + 1
+
+		local HashedName = HashValue(Value, Property.Type, GenerateId)
+		local ValueInfo = PropertyData.ValueMap[HashedName]
+		if ValueInfo then
+			ValueInfo.ObjectList[#ValueInfo.ObjectList + 1] = Object
+		else
+			PropertyData.ValueMap[HashedName] = {ObjectList = {Object}, Value = Value, Property = Property}
+		end
+	end
+
+	local UsedClassSet = {}
+	for _, Descendant in ipairs(Descendants) do
+		local ClassThing = MDClass[Descendant.ClassName]
+		UsedClassSet[ClassThing] = true
+
+		for _, Property in ipairs(GetPropertyList(Descendant.ClassName)) do
+			AddValue(Descendant, Property, Descendant[Property.Name])
+		end
+	end
+
+	local InstanceRefWidth = math.ceil(math.log(InstanceIdGenerator + 1) / 0.69314718055995)
+
+	local function GetSize(Value, Type)
+		if Type == "string" then
+			return 8 * #Value
+		else
+			local Enumeration = MDEnum[Type]
+			if Enumeration then
+				return Enumeration.BitWidth
+			elseif Type == "string" then
+				return -1
+			elseif Type == "int" then
+				return 32
+			elseif Type == "float" then
+				return 32
+			elseif Type == "double" then
+				return 64
+			elseif Type == "bool" then
+				return 1
+			elseif Type == "Vector3" then
+				return 96
+			elseif Type == "Vector2" then
+				return 64
+			elseif Type == "CFrame" then
+				return 192
+			elseif Type == "UDim2" then
+				return 128
+			elseif Type == "BrickColor" then
+				return 6
+			elseif Type == "Color3" then
+				return 96
+			elseif Type == "Object" then
+				return InstanceRefWidth
+			else
+				error("Bad type to TypeWidth: `" .. Type .. "`", 2)
+			end
+		end
+	end
+
+	local function WriteValue(BitBuffer, Type, Value)
+		local Enumeration = MDEnum[Type]
+		if Enumeration then
+			BitBuffer:WriteUnsigned(Enumeration.BitWidth, Enumeration.ValueToId[Value])
+		elseif Type == "string" then
+			BitBuffer:WriteString(Value)
+		elseif Type == "int" then
+			BitBuffer:WriteSigned(32, Value)
+		elseif Type == "float" then
+			BitBuffer:WriteFloat32(Value)
+		elseif Type == "double" then
+			BitBuffer:WriteFloat64(Value)
+		elseif Type == "bool" then
+			BitBuffer:WriteBool(Value)
+		elseif Type == "Vector3" then
+			BitBuffer:WriteFloat32(Value.X)
+			BitBuffer:WriteFloat32(Value.Y)
+			BitBuffer:WriteFloat32(Value.Z)
+		elseif Type == "CFrame" then
+			local Position = Value.Position
+			BitBuffer:WriteFloat32(Position.X)
+			BitBuffer:WriteFloat32(Position.Y)
+			BitBuffer:WriteFloat32(Position.Z)
+			BitBuffer:WriteRotation(Value)
+		elseif Type == "BrickColor" then
+			BitBuffer:WriteBrickColor(Value)
+		elseif Type == "Color3" then
+			BitBuffer:WriteFloat32(Value.R)
+			BitBuffer:WriteFloat32(Value.G)
+			BitBuffer:WriteFloat32(Value.B)
+		elseif Type == "Vector2" then
+			BitBuffer:WriteFloat32(Value.X)
+			BitBuffer:WriteFloat32(Value.Y)
+		elseif Type == "UDim2" then
+			BitBuffer:WriteSigned(17, Value.X.Offset)
+			BitBuffer:WriteFloat32(Value.X.Scale)
+			BitBuffer:WriteSigned(17, Value.Y.Offset)
+			BitBuffer:WriteFloat32(Value.Y.Scale)
+		elseif Type == "Object" then
+			if Value then
+				BitBuffer:WriteUnsigned(InstanceRefWidth, InstanceToId[Value])
+			else
+				BitBuffer:WriteUnsigned(InstanceRefWidth, 0)
+			end
+		end
+	end
+
+	local UsedClassList = {}
+	local UsedClassListLength = 0
+	local ClassNameToId = {}
+	local ListedClassSet = {}
+
+	for Class in next, UsedClassSet do
+		repeat
+			UsedClassListLength = UsedClassListLength + 1
+			UsedClassList[UsedClassListLength] = Class
+			ListedClassSet[Class] = true
+			ClassNameToId[Class.ClassName] = UsedClassListLength - 1
+			Class = MDClass[Class.BaseClassName]
+			if ListedClassSet[Class] then
+				break
+			end
+		until not Class
+	end
+
+	local MyClassIdWidth = math.ceil(math.log(UsedClassListLength + 1) / 0.69314718055995)
+	Buffer:WriteUnsigned(ClassIdWidthWidth, MyClassIdWidth)
+	Buffer:WriteUnsigned(5, InstanceRefWidth)
+	Buffer:WriteUnsigned(MyClassIdWidth, UsedClassListLength)
+
+	for _, Class in ipairs(UsedClassList) do
+		Buffer:WriteUnsigned(ClassIdWidth, Class.Id)
+		for _, Property in ipairs(GetPropertyList(Class.ClassName)) do
+			if Property.Class.ClassName == Class.ClassName then
+				local ModelPropertyData = AllPropertyValueBucket[Property.NSName]
+				local ValueList = {}
+				local ValueListLength = 0
+
+				for _, Value in next, ModelPropertyData.ValueMap do
+					ValueListLength = ValueListLength + 1
+					ValueList[ValueListLength] = Value
+				end
+
+				table.sort(ValueList, ValueListSort)
+
+				local AtlasedValueCount = 0
+				for _, Value in ipairs(ValueList) do
+					local ValueSize = GetSize(Value.Value, Value.Property.Type)
+					local ValueCount = #Value.ObjectList
+					local SavedMemory = ValueCount * ValueSize
+					local ExtraMemory = 1 + ValueSize + (AtlasedValueCount + 2) * ValueSize
+
+					if SavedMemory > ExtraMemory then
+						AtlasedValueCount = AtlasedValueCount + 1
+						Value.Atlased = true
+						Value.AtlasId = AtlasedValueCount
+					end
+				end
+
+				assert(ValueListLength > 0, "Value list should have at least one value, since property is present")
+				if ValueListLength == 1 then
+					Property.Mode = "Single"
+					Buffer:WriteBool(false)
+					if Property.NSName == "BasePart::Rotation" then
+						Buffer:WriteRotation(ValueList[1].ObjectList[1].CFrame)
+					else
+						WriteValue(Buffer, Property.Type, ValueList[1].Value)
+					end
+				else
+					Property.Mode = "Atlas"
+					Buffer:WriteBool(true)
+					for Index = 1, AtlasedValueCount do
+						local Value = ValueList[Index]
+						Buffer:WriteBool(true)
+						if Property.NSName == "BasePart::Rotation" then
+							Buffer:WriteRotation(Value.ObjectList[1].CFrame)
+						else
+							WriteValue(Buffer, Value.Property.Type, Value.Value)
+						end
+					end
+
+					Buffer:WriteBool(false)
+				end
+			end
+		end
+	end
+
+	Buffer:WriteUnsigned(MyClassIdWidth, ClassNameToId[Model.ClassName])
+	if InstanceToId[Model] then
+		Buffer:WriteBool(true)
+		Buffer:WriteUnsigned(InstanceRefWidth, InstanceToId[Model])
+	else
+		Buffer:WriteBool(false)
+	end
+
+	for _, Property in ipairs(GetPropertyList(Model.ClassName)) do
+		if Property.Mode == "Atlas" then
+			local ModelPropData = AllPropertyValueBucket[Property.NSName]
+			local ValueInfo = ModelPropData.ValueMap[HashValue(Model[Property.Name], Property.Type, GenerateId)]
+			if ValueInfo.Atlased then
+				for _ = 1, ValueInfo.AtlasId do
+					Buffer:WriteBool(true)
+				end
+
+				Buffer:WriteBool(false)
+			else
+				Buffer:WriteBool(false)
+				if Property.NSName == "BasePart::Rotation" then
+					Buffer:WriteRotation(Model.CFrame)
+				else
+					WriteValue(Buffer, ValueInfo.Property.Type, ValueInfo.Value)
+				end
+			end
+		--elseif Property.Mode == "Single" then
+		else
+			error("unreachable, bad prop mode: " .. tostring(Property.Mode) .. " on prop " .. Property.NSName .. " (" .. tostring(Property) .. ")", 2)
+		end
+	end
+
+	for _, Descendant in ipairs(Model:GetDescendants()) do
+		if not InstancesToIgnore[Descendant] then
+			Buffer:WriteBool(true)
+		end
+	end
+
+	Buffer:WriteBool(false)
+end
+
+function BitEncodeInstance.Read(Buffer)
+	CachedMDClass = {}
+
+	local MyClassIdWidth = Buffer:ReadUnsigned(ClassIdWidthWidth)
+	local InstanceRefWidth = Buffer:ReadUnsigned(5)
+	local UsedClassCount = Buffer:ReadUnsigned(MyClassIdWidth)
+
+	local function ReadValue(BitBuffer, Type)
+		local Enumeration = MDEnum[Type]
+		if Enumeration then
+			return Enumeration.ValueArray[BitBuffer:ReadUnsigned(Enumeration.BitWidth) + 1]
+		elseif Type == "string" then
+			return BitBuffer:ReadString()
+		elseif Type == "int" then
+			return BitBuffer:ReadSigned(32)
+		elseif Type == "float" then
+			return BitBuffer:ReadFloat32()
+		elseif Type == "double" then
+			return BitBuffer:ReadFloat64()
+		elseif Type == "bool" then
+			return BitBuffer:ReadBool()
+		elseif Type == "Vector3" then
+			local X = BitBuffer:ReadFloat32()
+			local Y = BitBuffer:ReadFloat32()
+			local Z = BitBuffer:ReadFloat32()
+			return Vector3.new(X, Y, Z)
+		elseif Type == "CFrame" then
+			local X = BitBuffer:ReadFloat32()
+			local Y = BitBuffer:ReadFloat32()
+			local Z = BitBuffer:ReadFloat32()
+			local Rotation = BitBuffer:ReadRotation()
+			return CFrame.new(X, Y, Z) * Rotation
+		elseif Type == "BrickColor" then
+			return BitBuffer:ReadBrickColor()
+		elseif Type == "Color3" then
+			local R = BitBuffer:ReadFloat32()
+			local G = BitBuffer:ReadFloat32()
+			local B = BitBuffer:ReadFloat32()
+			return Color3.new(R, G, B)
+		elseif Type == "Vector2" then
+			local X = BitBuffer:ReadFloat32()
+			local Y = BitBuffer:ReadFloat32()
+			return Vector2.new(X, Y)
+		elseif Type == "UDim2" then
+			local XO = BitBuffer:ReadSigned(17)
+			local XS = BitBuffer:ReadFloat32()
+			local YO = BitBuffer:ReadSigned(17)
+			local YS = BitBuffer:ReadFloat32()
+			return UDim2.new(XS, XO, YS, YO)
+		elseif Type == "Object" then
+			local Value = BitBuffer:ReadUnsigned(InstanceRefWidth)
+			if Value == 0 then
+				return nil
+			else
+				return Value
+			end
+		end
+	end
+
+	local UsedClassList = {}
+	local UsedClassListLength = 0
+	for _ = 1, UsedClassCount do
+		local ClassId = Buffer:ReadUnsigned(ClassIdWidth)
+		local Class = IdToClass[ClassId]
+		UsedClassListLength = UsedClassListLength + 1
+		UsedClassList[UsedClassListLength] = Class
+
+		for _, Property in ipairs(GetPropertyList(Class.ClassName)) do
+			if Property.Class.ClassName == Class.ClassName then
+				if Buffer:ReadBool() then
+					Property.Mode = "Atlas"
+					Property.ValueAtlas = {}
+					local AtlasId = 1
+
+					while Buffer:ReadBool() do
+						if Property.NSName == "BasePart::Rotation" then
+							Property.ValueAtlas[AtlasId] = Buffer:ReadRotation()
+						else
+							Property.ValueAtlas[AtlasId] = ReadValue(Buffer, Property.Type)
+						end
+
+						AtlasId = AtlasId + 1
+					end
+				else
+					Property.Mode = "Single"
+					if Property.NSName == "BasePart::Rotation" then
+						Property.Value = Buffer:ReadRotation()
+					else
+						Property.Value = ReadValue(Buffer, Property.Type)
+					end
+				end
+			end
+		end
+	end
+
+	local InstanceIdToInstance = {}
+	local InstanceRefsToPatch = {}
+	local InstanceRefsToPatchLength = 0
+
+	local function ReadObject(BitBuffer)
+		local ClassId = BitBuffer:ReadUnsigned(MyClassIdWidth)
+		local Class = UsedClassList[ClassId + 1]
+		local Object
+
+		if not Class or Class.ClassName == "BevelMesh" or Class.ClassName == "Instance" or Class.ClassName == "FaceInstance" then
+			Object = Instance.new("CylinderMesh")
+		elseif Class.ClassName == "BasePart" or Class.ClassName == "PVInstance" then
+			Object = Instance.new("Part")
+		else
+			Object = Instance.new(Class.ClassName)
+		end
+
+		if BitBuffer:ReadBool() then
+			InstanceIdToInstance[BitBuffer:ReadUnsigned(InstanceRefWidth)] = Object
+		end
+
+		local DeferredProperties = {}
+		local DeferredPropertiesLength = 0
+
+		for _, Property in ipairs(GetPropertyList(Object.ClassName)) do
+			if Property.Mode == "Atlas" then
+				local AtlasId = 0
+				while BitBuffer:ReadBool() do
+					AtlasId = AtlasId + 1
+				end
+
+				local Value
+				if AtlasId == 0 then
+					if Property.NSName == "BasePart::Rotation" then
+						Value = BitBuffer:ReadRotation()
+					else
+						Value = ReadValue(BitBuffer, Property.Type)
+					end
+				else
+					Value = Property.ValueAtlas[AtlasId]
+				end
+
+				if Property.Type == "Object" then
+					InstanceRefsToPatchLength = InstanceRefsToPatchLength + 1
+					InstanceRefsToPatch[InstanceRefsToPatchLength] = {
+						Object = Object;
+						Property = Property.Name;
+						Value = Value;
+					}
+				elseif Property.NSName == "BasePart::Rotation" then
+					Object.CFrame = CFrame.new(Object.Position) * Value
+				elseif Property.NSName == "BasePart::Size" then
+					DeferredPropertiesLength = DeferredPropertiesLength + 1
+					DeferredProperties[DeferredPropertiesLength] = {
+						Property = Property.Name;
+						Value = Value;
+					}
+				else
+					pcall(function()
+						Object[Property.Name] = Value
+					end)
+				end
+			elseif Property.Mode == "Single" then
+				if Property.Type == "Object" then
+					InstanceRefsToPatchLength = InstanceRefsToPatchLength + 1
+					InstanceRefsToPatch[InstanceRefsToPatchLength] = {
+						Object = Object;
+						Property = Property.Name;
+						Value = Property.Value;
+					}
+				elseif Property.NSName == "BasePart::Rotation" then
+					Object.CFrame = CFrame.new(Object.Position) * Property.Value
+				else
+					Object[Property.Name] = Property.Value
+				end
+			else
+				error("unreachable, bad prop mode: " .. tostring(Property.Mode) .. " on property " .. Property.NSName .. " (" .. tostring(Property) .. ")", 2)
+			end
+		end
+
+		for _, Property in ipairs(DeferredProperties) do
+			Object[Property.Property] = Property.Value
+		end
+
+		while BitBuffer:ReadBool() do
+			local Child = ReadObject(BitBuffer)
+			Child.Parent = Object
+		end
+
+		return Object
+	end
+
+	local Root = ReadObject(Buffer)
+	for _, PatchRef in ipairs(InstanceRefsToPatch) do
+		PatchRef.Object[PatchRef.Property] = InstanceIdToInstance[PatchRef.Value]
+	end
+
+	return Root
+end
+
+return BitEncodeInstance]]></ProtectedString>
+				<BinaryString name="Tags"></BinaryString>
+			</Properties>
+		</Item>
+		<Item class="ModuleScript" referent="RBX90803343B7F84C8DA77584EA8B638FBD">
+			<Properties>
+				<BinaryString name="AttributesSerialize"></BinaryString>
+				<Content name="LinkedSource"><null></null></Content>
+				<string name="Name">Generators</string>
+				<string name="ScriptGuid">{665393CC-FC14-4968-A2CD-C47A6FBB479E}</string>
+				<ProtectedString name="Source"><![CDATA[local DumpParser = require(script.Parent.DumpParser)
+local Generators = {}
+
+local ipairs = ipairs
+
+local function GetPropertyDictionary(ClassName)
+	local PropertiesRaw = DumpParser:GetPropertiesRaw(ClassName)
+	local Properties = {}
+
+	for _, Property in ipairs(PropertiesRaw) do
+		Properties[Property.Name] = true
+	end
+
+	return Properties
+end
+
+local function BuildForEncoding(ClassName)
+	local ClassTable = DumpParser:BuildClass(ClassName)
+	local SafeProperties = GetPropertyDictionary(ClassName)
+
+	local EncodeTable = {
+		Creatable = true;
+		BaseClassName = ClassTable.Superclass;
+		ClassName = ClassName;
+	}
+
+	local PropertyMap = {}
+
+	for _, Member in ipairs(ClassTable.Members) do
+		if Member.MemberType == "Property" and SafeProperties[Member.Name] then
+			PropertyMap[Member.Name] = {
+				Readonly = false;
+				PropertyName = Member.Name;
+				PropertyType = string.gsub(Member.ValueType.Name, "Instance", "Object");
+			}
+		end
+	end
+
+	EncodeTable.PropertyMap = PropertyMap
+	return EncodeTable
+end
+
+function Generators.GenerateMDClass()
+	local Dump = DumpParser:GetDump()
+	local MDClass = {}
+
+	for _, Class in ipairs(Dump.Classes) do
+		MDClass[Class.Name] = BuildForEncoding(Class.Name)
+	end
+
+	return MDClass
+end
+
+function Generators.GenerateMDEnum()
+	local Dump = DumpParser:GetDump()
+	local MDEnum = {}
+
+	for _, Enumeration in ipairs(Dump.Enums) do
+		local ValueMap = {}
+
+		for _, Value in ipairs(Enumeration.Items) do
+			ValueMap[Value.Name] = true
+		end
+
+		MDEnum[Enumeration.Name] = {
+			EnumName = Enumeration.Name;
+			ValueMap = ValueMap;
+		}
+	end
+
+	return MDEnum
+end
+
+return Generators]]></ProtectedString>
+				<BinaryString name="Tags"></BinaryString>
+			</Properties>
+		</Item>
+		<Item class="ModuleScript" referent="RBXD3EEF906BC8043CE9E38B22F32576B5A">
+			<Properties>
+				<BinaryString name="AttributesSerialize"></BinaryString>
+				<Content name="LinkedSource"><null></null></Content>
+				<string name="Name">BitBuffer</string>
+				<string name="ScriptGuid">{51E2792F-B265-4ED3-9C7E-049365180CEF}</string>
+				<ProtectedString name="Source"><![CDATA[--[[
+Differences from the original:
+	Using metatables instead of a function returning a table.
+	Added Vector3, Color3, Vector2, and UDim2 support.
+	Deprecated BrickColors.
+	Changed the creation method from BitBuffer.Create to BitBuffer.new.
+	OPTIMIZED!
+	Added a ::Destroy method.
+
+THE API:
+Constructor: BitBuffer.new()
+
+Read/Write pairs for reading data from or writing data to the BitBuffer:
+	BitBuffer::WriteUnsigned(BitWidth: number, Value: number): void
+	BitBuffer::ReadUnsigned(BitWidth: number): number
+		Read / Write an unsigned value with a given number of bits. The
+		value must be a positive integer. For instance, if BitWidth is
+		4, then there will be 4 magnitude bits, for a value in the
+		range [0, 2 ^ 4 - 1] = [0, 15]
+
+	BitBuffer::WriteSigned(BitWidth: number, Value: number): void
+	BitBuffer::ReadSigned(BitWidth: number): number
+		Read / Write a a signed value with a given number of bits. For
+		instance, if BitWidth is 4 then there will be 1 sign bit and
+		3 magnitude bits, a value in the range [-2 ^ 3 + 1, 2 ^ 3 - 1] = [-7, 7]
+
+	BitBuffer:WriteFloat(MantissaBitWidth: number, ExponentBitWidth: number, Value: number): void
+	BitBuffer:ReadFloat(MantissaBitWidth, ExponentBitWidth): number
+		Read / Write a floating point number with a given mantissa and
+		exponent size in bits.
+
+	BitBuffer::WriteFloat8(Float: number): void
+	BitBuffer::ReadFloat8(): number
+
+	BitBuffer::WriteFloat16(Float: number): void
+	BitBuffer::ReadFloat16(): number
+
+	BitBuffer::WriteFloat32(Float: number): void
+	BitBuffer::ReadFloat32(): number
+
+	BitBuffer::WriteFloat64(Float: number): void
+	BitBuffer::ReadFloat64(): number
+		Read and write the common types of floating point number that
+		are used in code. If you want to 100% accurately save an
+		arbitrary Lua number, then you should use the Float64 format. If
+		your number is known to be smaller, or you want to save space
+		and don't need super high precision, then a Float32 will often
+		suffice. For instance, the Transparency of an object will do
+		just fine as a Float32.
+
+	BitBuffer::WriteBool(Boolean: boolean): void
+	BitBuffer::ReadBool(): boolean
+		Read / Write a boolean (true / false) value. Takes one bit worth of space to store.
+
+	BitBuffer::WriteString(String: string): void
+	BitBuffer::ReadString(): string
+		Read / Write a variable length string. The string may contain embedded nulls.
+		Only 7 bits / character will be used if the string contains no non-printable characters (greater than 0x80).
+
+	****** PLEASE DON'T USE THIS. USE ::WRITECOLOR3 INSTEAD. ******
+	BitBuffer::WriteBrickColor(Color: BrickColor): void
+	BitBuffer::ReadBrickColor(): BrickColor
+		Read / Write a Roblox BrickColor. Provided as an example of reading / writing a derived data type.
+		Please don't actually use this, just use ::WriteColor3 instead.
+
+	BitBuffer::WriteColor3(Color: Color3): void
+	BitBuffer::ReadColor3(): Color3
+		Read / Write a Roblox Color3. Use this over the BrickColor methods, PLEASE.
+
+	BitBuffer::WriteRotation(CoordinateFrame: CFrame): void
+	BitBuffer::ReadRotation(): CFrame
+		Read / Write the rotation part of a given CFrame. Encodes the
+		rotation in question into 64bits, which is a good size to get
+		a pretty dense packing, but still while having errors well within
+		the threshold that Roblox uses for stuff like MakeJoints()
+		detecting adjacency. Will also perfectly reproduce rotations which
+		are orthagonally aligned, or inverse-power-of-two rotated on only
+		a single axix. For other rotations, the results may not be
+		perfectly stable through read-write cycles (if you read/write an
+		arbitrary rotation thousands of times there may be detectable
+		"drift")
+
+	BitBuffer::WriteVector3(Vector: Vector3): void
+	BitBuffer::ReadVector3(): Vector3
+	BitBuffer::WriteVector3Float32(Vector: Vector3): void
+	BitBuffer::ReadVector3Float32(): Vector3
+		Read / write a Vector3. Encodes the vector using 32-bit precision.
+		For more precision, use BitBuffer::WriteVector3Float64 instead.
+
+	BitBuffer::WriteVector3Float64(Vector: Vector3): void
+	BitBuffer::ReadVector3Float64(): Vector3
+		Read / write a Vector3. Encodes the vector using 64-bit precision.
+		For less precision, use BitBuffer::WriteVector3 instead.
+
+	BitBuffer::WriteVector2(Vector: Vector2): void
+	BitBuffer::ReadVector2(): Vector2
+	BitBuffer::WriteVector2Float32(Vector: Vector2): void
+	BitBuffer::ReadVector2Float32(): Vector2
+		Read / write a Vector2. Encodes the vector using 32-bit precision.
+		For more precision, use BitBuffer::WriteVector2Float64 instead.
+
+	BitBuffer::WriteVector2Float64(Vector: Vector2): void
+	BitBuffer::ReadVector2Float64(): Vector2
+		Read / write a Vector2. Encodes the vector using 64-bit precision.
+		For less precision, use BitBuffer::WriteVector2Float32 instead.
+
+	BitBuffer::WriteCFrame(CoordinateFrame: CFrame): void
+	BitBuffer::ReadCFrame(): CFrame
+		Read / write the whole CFrame. This will call both ::WriteVector3Float64 and ::WriteRotation
+		to save the entire CFrame, and encodes it using 64-bit precision.
+
+	BitBuffer::WriteUDim2(Value: UDim2): void
+	BitBuffer::ReadUDim2(): UDim2
+		Read / write a UDim2. Encodes the value using 32-bit precision.
+
+From/To pairs for dumping out the BitBuffer to another format:
+	BitBuffer::ToString(): string
+	BitBuffer::FromString(String: string): void
+		Will replace / dump out the contents of the buffer to / from
+		a binary chunk encoded as a Lua string. This string is NOT
+		suitable for storage in the Roblox DataStores, as they do
+		not handle non-printable characters well.
+
+	BitBuffer::ToBase64(): string
+	BitBuffer::FromBase64(String: string): void
+		Will replace / dump out the contents of the buffer to / from
+		a set of Base64 encoded data, as a Lua string. This string
+		only consists of Base64 printable characters, so it is
+		ideal for storage in Roblox DataStores.
+
+	BitBuffer::ToBase128(): string
+	BitBuffer::FromBase128(String: string): void
+		Defaultio added this function. 128 characters can all be written
+		to DataStores, so this function packs more tightly than saving
+		in only 64 bit strings. Full disclosure: I have no idea what I'm
+		doing but I think this is useful.
+
+Buffer / Position Manipulation
+	BitBuffer::ResetPointer(): void
+		Will Reset the point in the buffer that is being read / written
+		to back to the start of the buffer.
+
+	BitBuffer::Reset(): void
+		Will reset the buffer to a clean state, with no contents.
+
+Example Usage:
+	local function SaveToBuffer(buffer, userData)
+		buffer:WriteString(userData.HeroName)
+		buffer:WriteUnsigned(14, userData.Score) --> 14 bits -> [0, 2^14-1] -> [0, 16383]
+		buffer:WriteBool(userData.HasDoneSomething)
+		buffer:WriteUnsigned(10, #userData.ItemList) --> [0, 1023]
+		for _, itemInfo in pairs(userData.ItemList) do
+			buffer:WriteString(itemInfo.Identifier)
+			buffer:WriteUnsigned(10, itemInfo.Count) --> [0, 1023]
+		end
+	end
+
+	local function LoadFromBuffer(buffer, userData)
+		userData.HeroName = buffer:ReadString()
+		userData.Score = buffer:ReadUnsigned(14)
+		userData.HasDoneSomething = buffer:ReadBool()
+		local itemCount = buffer:ReadUnsigned(10)
+		for i = 1, itemCount do
+			local itemInfo = {}
+			itemInfo.Identifier = buffer:ReadString()
+			itemInfo.Count = buffer:ReadUnsigned(10)
+			table.insert(userData.ItemList, itemInfo)
+		end
+	end
+
+	--...
+	local buff = BitBuffer.new()
+	SaveToBuffer(buff, someUserData)
+	myDataStore:SetAsync(somePlayer.userId, buff:ToBase64())
+
+	--...
+	local data = myDataStore:GetAsync(somePlayer.userId)
+	local buff = BitBuffer.new()
+	buff:FromBase64(data)
+	LoadFromBuffer(buff, someUserData)
+--]]
+
+-- This is quite possibly the fastest BitBuffer module.
+
+-- To-do: Remove `self:` calls, they're slow.
+
+local BitBuffer = {
+	ClassName = "BitBuffer";
+	__tostring = function()
+		return "BitBuffer"
+	end;
+}
+
+BitBuffer.__index = BitBuffer
+
+local CHAR_0X10 = string.char(0x10)
+local LOG_10_OF_2 = math.log10(2)
+local DEPRECATED_WARNING = true
+local DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+local function ToBase(Number, Base)
+	Number = math.floor(Number)
+	if not Base or Base == 10 then
+		return tostring(Number)
+	end
+
+	local Array = {}
+	local Sign = ""
+	if Number < 0 then
+		Sign = "-"
+		Number = 0 - Number
+	end
+
+	repeat
+		local Index = (Number % Base) + 1
+		Number = math.floor(Number / Base)
+		table.insert(Array, 1, string.sub(DIGITS, Index, Index))
+	until Number == 0
+
+	return Sign .. table.concat(Array)
+end
+
+local function DetermineType(Value)
+	local ActualType = typeof(Value)
+	if ActualType == "number" then
+		if Value % 1 == 0 then
+			return Value < 0 and "negative integer" or "positive integer"
+		else
+			return Value < 0 and "negative number" or "positive number"
+		end
+	elseif ActualType == "table" then
+		local Key = next(Value)
+		if DetermineType(Key) == "positive integer" then
+			return "array"
+		else
+			return "dictionary"
+		end
+	else
+		return ActualType
+	end
+end
+
+local NumberToBase64, Base64ToNumber = {}, {}
+
+do
+	local CHARACTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	for Index = 1, 64 do
+		local Character = string.sub(CHARACTERS, Index, Index)
+		NumberToBase64[Index - 1] = Character
+		Base64ToNumber[Character] = Index - 1
+	end
+end
+
+-- Credit to Defaultio.
+local NumberToBase128, Base128ToNumber = {}, {}
+
+do
+	local Base128Characters = ""
+	for Index = 0, 127 do
+		Base128Characters = Base128Characters .. string.char(Index)
+	end
+
+	for Index = 1, 128 do
+		local Character = string.sub(Base128Characters, Index, Index)
+		NumberToBase128[Index - 1] = Character
+		Base128ToNumber[Character] = Index - 1
+	end
+end
+
+local PowerOfTwo = setmetatable({}, {
+	__index = function(self, Index)
+		local Value = 2 ^ Index
+		self[Index] = Value
+		return Value
+	end;
+})
+
+for Index = 0, 128 do
+	local _ = PowerOfTwo[Index]
+end
+
+local BrickColorToNumber, NumberToBrickColor = {}, {}
+
+do
+	for Index = 0, 63 do
+		local Color = BrickColor.palette(Index)
+		BrickColorToNumber[Color.Number] = Index
+		NumberToBrickColor[Index] = Color
+	end
+end
+
+--[[**
+	Creates a new BitBuffer.
+	@returns [BitBuffer] The new BitBuffer.
+**--]]
+function BitBuffer.new()
+	return setmetatable({
+		BitPointer = 0;
+		mBitBuffer = {};
+	}, BitBuffer)
+end
+
+--[[**
+	Resets the BitBuffer's BitPointer.
+	@returns [void]
+**--]]
+function BitBuffer:ResetPointer()
+	self.BitPointer = 0
+end
+
+--[[**
+	Resets the BitBuffer's BitPointer and buffer table.
+	@returns [void]
+**--]]
+function BitBuffer:Reset()
+	self.mBitBuffer, self.BitPointer = {}, 0
+end
+
+--[[**
+	Reads the given string and writes to the BitBuffer accordingly. Not really useful.
+	@param [t:string] String The string.
+	@returns [void]
+**--]]
+function BitBuffer:FromString(String)
+	if type(String) ~= "string" then
+		error(string.format("bad argument #1 in BitBuffer::FromString (string expected, instead got %s)", typeof(String)), 2)
+	end
+
+	self.mBitBuffer, self.BitPointer = {}, 0
+	local BitPointerValue = 0
+
+	for Index = 1, #String do
+		local ByteCharacter = string.byte(String, Index, Index)
+		for _ = 1, 8 do
+			BitPointerValue = BitPointerValue + 1
+			self.BitPointer = BitPointerValue
+			self.mBitBuffer[BitPointerValue] = ByteCharacter % 2
+			ByteCharacter = math.floor(ByteCharacter / 2)
+		end
+	end
+
+	self.BitPointer = 0
+end
+
+--[[**
+	Writes the BitBuffer to a string.
+	@returns [t:string] The BitBuffer string.
+**--]]
+function BitBuffer:ToString()
+	local String = ""
+	local Accumulator = 0
+	local Power = 0
+	local mBitBuffer = self.mBitBuffer
+
+	for Index = 1, math.ceil(#mBitBuffer / 8) * 8 do
+		Accumulator = Accumulator + PowerOfTwo[Power] * (mBitBuffer[Index] or 0)
+		Power = Power + 1
+		if Power >= 8 then
+			String = String .. string.char(Accumulator)
+			Accumulator = 0
+			Power = 0
+		end
+	end
+
+	return String
+end
+
+--[[**
+	Reads the given Base64 string and writes to the BitBuffer accordingly.
+	@param [t:string] String The Base64 string.
+	@returns [void]
+**--]]
+function BitBuffer:FromBase64(String)
+	if type(String) ~= "string" then
+		error(string.format("bad argument #1 in BitBuffer::FromBase64 (string expected, instead got %s)", typeof(String)), 2)
+	end
+
+	self.mBitBuffer, self.BitPointer = {}, 0
+	local BitPointerValue = 0
+
+	for Index = 1, #String do
+		local Character = string.sub(String, Index, Index)
+		local ByteCharacter = Base64ToNumber[Character]
+		if not ByteCharacter then
+			error("Bad character: 0x" .. ToBase(string.byte(Character), 16), 2)
+		end
+
+		for _ = 1, 6 do
+			BitPointerValue = BitPointerValue + 1
+			self.BitPointer = BitPointerValue
+			self.mBitBuffer[BitPointerValue] = ByteCharacter % 2
+			ByteCharacter = math.floor(ByteCharacter / 2)
+		end
+
+		if ByteCharacter ~= 0 then
+			error("Character value 0x" .. ToBase(Base64ToNumber[Character], 16) .. " too large", 2)
+		end
+	end
+
+	self.BitPointer = 0
+end
+
+--[[**
+	Writes the BitBuffer to a Base64 string.
+	@returns [t:string] The BitBuffer encoded in Base64.
+**--]]
+function BitBuffer:ToBase64()
+	local Array = {}
+	local Length = 0
+	local Accumulator = 0
+	local Power = 0
+	local mBitBuffer = self.mBitBuffer
+
+	for Index = 1, math.ceil(#mBitBuffer / 6) * 6 do
+		Accumulator = Accumulator + PowerOfTwo[Power] * (mBitBuffer[Index] or 0)
+		Power = Power + 1
+		if Power >= 6 then
+			Length = Length + 1
+			Array[Length] = NumberToBase64[Accumulator]
+			Accumulator = 0
+			Power = 0
+		end
+	end
+
+	return table.concat(Array)
+end
+
+--[[**
+	Reads the given Base128 string and writes to the BitBuffer accordingly. Not recommended. Credit to Defaultio for the original functions.
+	@param [t:string] String The Base128 string.
+	@returns [void]
+**--]]
+function BitBuffer:FromBase128(String)
+	if type(String) ~= "string" then
+		error(string.format("bad argument #1 in BitBuffer::FromBase128 (string expected, instead got %s)", typeof(String)), 2)
+	end
+
+	self.mBitBuffer, self.BitPointer = {}, 0
+	local BitPointerValue = 0
+
+	for Index = 1, #String do
+		local Character = string.sub(String, Index, Index)
+		local ByteCharacter = Base128ToNumber[Character]
+		if not ByteCharacter then
+			error("Bad character: 0x" .. ToBase(string.byte(Character), 16), 2)
+		end
+
+		for _ = 1, 7 do
+			BitPointerValue = BitPointerValue + 1
+			self.BitPointer = BitPointerValue
+			self.mBitBuffer[BitPointerValue] = ByteCharacter % 2
+			ByteCharacter = math.floor(ByteCharacter / 2)
+		end
+
+		if ByteCharacter ~= 0 then
+			error("Character value 0x" .. ToBase(Base128ToNumber[Character], 16) .. " too large", 2)
+		end
+	end
+
+	self.BitPointer = 0
+end
+
+--[[**
+	Writes the BitBuffer to Base128. Not recommended. Credit to Defaultio for the original functions.
+	@returns [t:string] The BitBuffer encoded in Base128.
+**--]]
+function BitBuffer:ToBase128()
+	local Array = {}
+	local Length = 0
+	local Accumulator = 0
+	local Power = 0
+	local mBitBuffer = self.mBitBuffer
+
+	for Index = 1, math.ceil(#mBitBuffer / 7) * 7 do
+		Accumulator = Accumulator + PowerOfTwo[Power] * (mBitBuffer[Index] or 0)
+		Power = Power + 1
+		if Power >= 7 then
+			Length = Length + 1
+			Array[Length] = NumberToBase128[Accumulator]
+			Accumulator = 0
+			Power = 0
+		end
+	end
+
+	return table.concat(Array)
+end
+
+--[[**
+	Dumps the BitBuffer data and prints it.
+	@returns [void]
+**--]]
+function BitBuffer:Dump()
+	local String = ""
+	local String2 = ""
+	local Accumulator = 0
+	local Power = 0
+	local mBitBuffer = self.mBitBuffer
+
+	for Index = 1, math.ceil(#mBitBuffer / 8) * 8 do
+		String2 = String2 .. (mBitBuffer[Index] or 0)
+		Accumulator = Accumulator + PowerOfTwo[Power] * (mBitBuffer[Index] or 0)
+		Power = Power + 1
+
+		if Power >= 8 then
+			String2 = String2 .. " "
+			String = String .. "0x" .. ToBase(Accumulator, 16) .. " "
+			Accumulator = 0
+			Power = 0
+		end
+	end
+
+	print("[Dump] Bytes:", String)
+	print("[Dump] Bits:", String2)
+end
+
+function BitBuffer:_ReadBit()
+	self.BitPointer = self.BitPointer + 1
+	return self.mBitBuffer[self.BitPointer]
+end
+
+--[[**
+	Writes an unsigned number to the BitBuffer.
+	@param [t:integer] Width The bit width of the value.
+	@param [t:integer] Value The unsigned integer.
+	@returns [void]
+**--]]
+function BitBuffer:WriteUnsigned(Width, Value)
+	if type(Width) ~= "number" then
+		error(string.format("bad argument #1 in BitBuffer::WriteUnsigned (number expected, instead got %s)", DetermineType(Width)), 2)
+	end
+
+	if not (Value or type(Value) == "number" or Value >= 0 or Value % 1 == 0) then
+		error(string.format("bad argument #2 in BitBuffer::WriteUnsigned (positive integer expected, instead got %s)", DetermineType(Value)), 2)
+	end
+
+	-- Store LSB first
+	for _ = 1, Width do
+		self.BitPointer = self.BitPointer + 1
+		self.mBitBuffer[self.BitPointer] = Value % 2
+		Value = math.floor(Value / 2)
+	end
+
+	if Value ~= 0 then
+		error("Value " .. tostring(Value) .. " has width greater than " .. Width .. " bits", 2)
+	end
+end
+
+--[[**
+	Reads an unsigned integer from the BitBuffer.
+	@param [t:integer] Width The bit width of the value.
+	@returns [t:integer] The unsigned integer.
+**--]]
+function BitBuffer:ReadUnsigned(Width)
+	local Value = 0
+	for Index = 1, Width do
+		Value = Value + self:_ReadBit() * PowerOfTwo[Index - 1]
+	end
+
+	return Value
+end
+
+--[[**
+	Writes a signed integer to the BitBuffer.
+	@param [t:integer] Width The bit width of the value.
+	@param [t:integer] Value The signed integer.
+	@returns [void]
+**--]]
+function BitBuffer:WriteSigned(Width, Value)
+	if not (Width and Value) then
+		error("bad arguments in BitBuffer::WriteSigned (missing values)", 2)
+	end
+
+	if Value % 1 ~= 0 then
+		error("Non-integer value to BitBuffer::WriteSigned", 2)
+	end
+
+	-- Write sign
+	if Value < 0 then
+		self.BitPointer = self.BitPointer + 1
+		self.mBitBuffer[self.BitPointer] = 1
+		Value = 0 - Value
+	else
+		self.BitPointer = self.BitPointer + 1
+		self.mBitBuffer[self.BitPointer] = 0
+	end
+
+	self:WriteUnsigned(Width - 1, Value)
+end
+
+--[[**
+	Reads a signed integer from the BitBuffer.
+	@param [t:integer] Width The bit width of the value.
+	@returns [t:integer] The signed integer.
+**--]]
+function BitBuffer:ReadSigned(Width)
+	self.BitPointer = self.BitPointer + 1
+	return ((-1) ^ self.mBitBuffer[self.BitPointer]) * self:ReadUnsigned(Width - 1)
+end
+
+--[[**
+	Writes a string to the BitBuffer.
+	@param [t:string] String The string you are writing to the BitBuffer.
+	@returns [void]
+**--]]
+function BitBuffer:WriteString(String)
+	if type(String) ~= "string" then
+		error(string.format("bad argument #1 in BitBuffer::WriteString (string expected, instead got %s)", typeof(String)), 2)
+	end
+
+	-- First check if it's a 7 or 8 bit width of string
+	local StringLength = #String
+	local BitWidth = 7
+	for Index = 1, StringLength do
+		if string.byte(String, Index, Index) > 127 then
+			BitWidth = 8
+			break
+		end
+	end
+
+	-- Write the bit width flag
+	self:WriteUnsigned(1, BitWidth == 7 and 0 or 1) -- 1 for wide chars
+
+	-- Now write out the string, terminated with "0x10, 0b0"
+	-- 0x10 is encoded as "0x10, 0b1"
+	for Index = 1, StringLength do
+		local ByteCharacter = string.byte(String, Index, Index)
+		if ByteCharacter == 0x10 then
+			self:WriteUnsigned(BitWidth, 0x10)
+			self:WriteUnsigned(1, 1)
+		else
+			self:WriteUnsigned(BitWidth, ByteCharacter)
+		end
+	end
+
+	-- Write terminator
+	self:WriteUnsigned(BitWidth, 0x10)
+	self:WriteUnsigned(1, 0)
+end
+
+--[[**
+	Reads the BitBuffer for a string.
+	@returns [t:string] The string written to the BitBuffer.
+**--]]
+function BitBuffer:ReadString()
+	-- Get bit width
+	local BitWidth = self:ReadUnsigned(1) == 1 and 8 or 7
+
+	-- Loop
+	local String = ""
+	while true do
+		local Character = self:ReadUnsigned(BitWidth)
+		if Character == 0x10 then
+			if self:ReadUnsigned(1) == 1 then
+				String = String .. CHAR_0X10
+			else
+				break
+			end
+		else
+			String = String .. string.char(Character)
+		end
+	end
+
+	return String
+end
+
+--[[**
+	Writes a boolean to the BitBuffer.
+	@param [t:boolean] Boolean The value you are writing to the BitBuffer.
+	@returns [void]
+**--]]
+function BitBuffer:WriteBool(Boolean)
+	if type(Boolean) ~= "boolean" then
+		error(string.format("bad argument #1 in BitBuffer::WriteBool (boolean expected, instead got %s)", typeof(Boolean)), 2)
+	end
+
+	self:WriteUnsigned(1, Boolean and 1 or 0)
+end
+
+BitBuffer.WriteBoolean = BitBuffer.WriteBool
+
+--[[**
+	Reads the BitBuffer for a boolean.
+	@returns [t:boolean] The boolean.
+**--]]
+function BitBuffer:ReadBool()
+	return self:ReadUnsigned(1) == 1
+end
+
+BitBuffer.ReadBoolean = BitBuffer.ReadBool
+
+-- Read / Write a floating point number with |wfrac| fraction part
+-- bits, |wexp| exponent part bits, and one sign bit.
+
+--[[**
+	Writes a float to the BitBuffer.
+	@param [t:integer] Fraction The number of bits (probably).
+	@param [t:integer] WriteExponent The number of bits for the decimal (probably).
+	@param [t:number] Float The actual number you are writing.
+	@returns [void]
+**--]]
+function BitBuffer:WriteFloat(Fraction, WriteExponent, Float)
+	if not (Fraction and WriteExponent and Float) then
+		error("missing argument(s)", 2)
+	end
+
+	-- Sign
+	local Sign = 1
+	if Float < 0 then
+		Float = 0 - Float
+		Sign = -1
+	end
+
+	-- Decompose
+	local Mantissa, Exponent = math.frexp(Float)
+	if Exponent == 0 and Mantissa == 0 then
+		self:WriteUnsigned(Fraction + WriteExponent + 1, 0)
+		return
+	else
+		Mantissa = (Mantissa - 0.5) / 0.5 * PowerOfTwo[Fraction]
+	end
+
+	-- Write sign
+	self:WriteUnsigned(1, Sign == -1 and 1 or 0)
+
+	-- Write mantissa
+	Mantissa = Mantissa + 0.5
+	Mantissa = math.floor(Mantissa) -- Not really correct, should round up/down based on the parity of |wexp|
+	self:WriteUnsigned(Fraction, Mantissa)
+
+	-- Write exponent
+	local MaxExp = PowerOfTwo[WriteExponent - 1] - 1
+	self:WriteSigned(WriteExponent, Exponent > MaxExp and MaxExp or Exponent < -MaxExp and -MaxExp or Exponent)
+end
+
+--[[**
+	Reads a float from the BitBuffer.
+	@param [t:integer] Fraction The number of bits (probably).
+	@param [t:integer] WriteExponent The number of bits for the decimal (probably).
+	@returns [t:number] The float.
+**--]]
+function BitBuffer:ReadFloat(Fraction, WriteExponent)
+	if not (Fraction and WriteExponent) then
+		error("missing argument(s)", 2)
+	end
+
+	local Sign = self:ReadUnsigned(1) == 1 and -1 or 1
+	local Mantissa = self:ReadUnsigned(Fraction)
+	local Exponent = self:ReadSigned(WriteExponent)
+	if Exponent == 0 and Mantissa == 0 then
+		return 0
+	end
+
+	Mantissa = Mantissa / PowerOfTwo[Fraction] / 2 + 0.5
+	return Sign * math.ldexp(Mantissa, Exponent)
+end
+
+--[[**
+	Writes a float8 (quarter precision) to the BitBuffer.
+	@param [t:number] The float8.
+	@returns [void]
+**--]]
+function BitBuffer:WriteFloat8(Float)
+	self:WriteFloat(3, 4, Float)
+end
+
+--[[**
+	Reads a float8 (quarter precision) from the BitBuffer.
+	@returns [t:number] The float8.
+**--]]
+function BitBuffer:ReadFloat8()
+	local Sign = self:ReadUnsigned(1) == 1 and -1 or 1
+	local Mantissa = self:ReadUnsigned(3)
+	local Exponent = self:ReadSigned(4)
+	if Exponent == 0 and Mantissa == 0 then
+		return 0
+	end
+
+	Mantissa = Mantissa / PowerOfTwo[3] / 2 + 0.5
+	return Sign * math.ldexp(Mantissa, Exponent)
+end
+
+--[[**
+	Writes a float16 (half precision) to the BitBuffer.
+	@param [t:number] The float16.
+	@returns [void]
+**--]]
+function BitBuffer:WriteFloat16(Float)
+	self:WriteFloat(10, 5, Float)
+end
+
+--[[**
+	Reads a float16 (half precision) from the BitBuffer.
+	@returns [t:number] The float16.
+**--]]
+function BitBuffer:ReadFloat16()
+	local Sign = self:ReadUnsigned(1) == 1 and -1 or 1
+	local Mantissa = self:ReadUnsigned(10)
+	local Exponent = self:ReadSigned(5)
+	if Exponent == 0 and Mantissa == 0 then
+		return 0
+	end
+
+	Mantissa = Mantissa / PowerOfTwo[10] / 2 + 0.5
+	return Sign * math.ldexp(Mantissa, Exponent)
+end
+
+--[[**
+	Writes a float32 (single precision) to the BitBuffer.
+	@param [t:number] The float32.
+	@returns [void]
+**--]]
+function BitBuffer:WriteFloat32(Float)
+	self:WriteFloat(23, 8, Float)
+end
+
+--[[**
+	Reads a float32 (single precision) from the BitBuffer.
+	@returns [t:number] The float32.
+**--]]
+function BitBuffer:ReadFloat32()
+	local Sign = self:ReadUnsigned(1) == 1 and -1 or 1
+	local Mantissa = self:ReadUnsigned(23)
+	local Exponent = self:ReadSigned(8)
+	if Exponent == 0 and Mantissa == 0 then
+		return 0
+	end
+
+	Mantissa = Mantissa / PowerOfTwo[23] / 2 + 0.5
+	return Sign * math.ldexp(Mantissa, Exponent)
+end
+
+--[[**
+	Writes a float64 (double precision) to the BitBuffer.
+	@param [t:number] The float64.
+	@returns [void]
+**--]]
+function BitBuffer:WriteFloat64(Float)
+	self:WriteFloat(52, 11, Float)
+end
+
+--[[**
+	Reads a float64 (double precision) from the BitBuffer.
+	@returns [t:number] The float64.
+**--]]
+function BitBuffer:ReadFloat64()
+	local Sign = self:ReadUnsigned(1) == 1 and -1 or 1
+	local Mantissa = self:ReadUnsigned(52)
+	local Exponent = self:ReadSigned(11)
+	if Exponent == 0 and Mantissa == 0 then
+		return 0
+	end
+
+	Mantissa = Mantissa / PowerOfTwo[52] / 2 + 0.5
+	return Sign * math.ldexp(Mantissa, Exponent)
+end
+
+-- Roblox DataTypes
+
+if DEPRECATED_WARNING then
+	--[[**
+		[DEPRECATED] Writes a BrickColor to the BitBuffer.
+		@param [t:BrickColor] Color The BrickColor you are writing to the BitBuffer.
+		@returns [void]
+	**--]]
+	function BitBuffer:WriteBrickColor(Color)
+		if typeof(Color) ~= "BrickColor" then
+			error(string.format("bad argument #1 in BitBuffer::WriteBrickColor (BrickColor expected, instead got %s)", typeof(Color)), 2)
+		end
+
+		warn("::WriteBrickColor is deprecated. Using ::WriteColor3 is suggested instead.")
+
+		local BrickColorNumber = BrickColorToNumber[Color.Number]
+		if not BrickColorNumber then
+			warn("Attempt to serialize non-pallete BrickColor \"" .. tostring(Color) .. "\" (#" .. Color.Number .. "), using Light Stone Grey instead.")
+			BrickColorNumber = BrickColorToNumber[1032]
+		end
+
+		self:WriteUnsigned(6, BrickColorNumber)
+	end
+else
+	--[[**
+		[DEPRECATED] Writes a BrickColor to the BitBuffer.
+		@param [t:BrickColor] Color The BrickColor you are writing to the BitBuffer.
+		@returns [void]
+	**--]]
+	function BitBuffer:WriteBrickColor(Color)
+		if typeof(Color) ~= "BrickColor" then
+			error(string.format("bad argument #1 in BitBuffer::WriteBrickColor (BrickColor expected, instead got %s)", typeof(Color)), 2)
+		end
+
+		local BrickColorNumber = BrickColorToNumber[Color.Number]
+		if not BrickColorNumber then
+			warn("Attempt to serialize non-pallete BrickColor \"" .. tostring(Color) .. "\" (#" .. Color.Number .. "), using Light Stone Grey instead.")
+			BrickColorNumber = BrickColorToNumber[1032]
+		end
+
+		self:WriteUnsigned(6, BrickColorNumber)
+	end
+end
+
+--[[**
+	[DEPRECATED] Reads a BrickColor from the BitBuffer.
+	@returns [t:BrickColor] The BrickColor read from the BitBuffer.
+**--]]
+function BitBuffer:ReadBrickColor()
+	return NumberToBrickColor[self:ReadUnsigned(6)]
+end
+
+--[[**
+	Writes the rotation part of a CFrame into the BitBuffer.
+	@param [t:CFrame] CoordinateFrame The CFrame you wish to write.
+	@returns [void]
+**--]]
+function BitBuffer:WriteRotation(CoordinateFrame)
+	if typeof(CoordinateFrame) ~= "CFrame" then
+		error(string.format("bad argument #1 in BitBuffer::WriteRotation (CFrame expected, instead got %s)", typeof(CoordinateFrame)), 2)
+	end
+
+	local LookVector = CoordinateFrame.LookVector
+	local Azumith = math.atan2(-LookVector.X, -LookVector.Z)
+	local Elevation = math.atan2(LookVector.Y, math.sqrt(LookVector.X * LookVector.X + LookVector.Z * LookVector.Z))
+	local WithoutRoll = CFrame.new(CoordinateFrame.Position) * CFrame.Angles(0, Azumith, 0) * CFrame.Angles(Elevation, 0, 0)
+	local _, _, Roll = (WithoutRoll:Inverse() * CoordinateFrame):ToEulerAnglesXYZ()
+
+	-- Atan2 -> in the range [-pi, pi]
+	Azumith = math.floor(((Azumith / 3.1415926535898) * 2097151) + 0.5)
+	Roll = math.floor(((Roll / 3.1415926535898) * 1048575) + 0.5)
+	Elevation = math.floor(((Elevation / 1.5707963267949) * 1048575) + 0.5)
+
+	self:WriteSigned(22, Azumith)
+	self:WriteSigned(21, Roll)
+	self:WriteSigned(21, Elevation)
+end
+
+--[[**
+	Reads the rotation part of a CFrame saved in the BitBuffer.
+	@returns [t:CFrame] The rotation read from the BitBuffer.
+**--]]
+function BitBuffer:ReadRotation()
+	local Azumith = self:ReadSigned(22)
+	local Roll = self:ReadSigned(21)
+	local Elevation = self:ReadSigned(21)
+
+	Azumith = 3.1415926535898 * (Azumith / 2097151)
+	Roll = 3.1415926535898 * (Roll / 1048575)
+	Elevation = 3.1415926535898 * (Elevation / 1048575)
+
+	local Rotation = CFrame.Angles(0, Azumith, 0)
+	Rotation = Rotation * CFrame.Angles(Elevation, 0, 0)
+	Rotation = Rotation * CFrame.Angles(0, 0, Roll)
+
+	return Rotation
+end
+
+--[[**
+	Writes a Color3 to the BitBuffer.
+	@param [t:Color3] Color The color you want to write into the BitBuffer.
+	@returns [void]
+**--]]
+function BitBuffer:WriteColor3(Color)
+	if typeof(Color) ~= "Color3" then
+		error(string.format("bad argument #1 in BitBuffer::WriteColor3 (Color3 expected, instead got %s)", typeof(Color)), 2)
+	end
+
+	local R, G, B = Color.R * 255, Color.G * 255, Color.B * 255
+
+	self:WriteUnsigned(8, math.floor(R))
+	self:WriteUnsigned(8, math.floor(G))
+	self:WriteUnsigned(8, math.floor(B))
+end
+
+--[[**
+	Reads a Color3 from the BitBuffer.
+	@returns [t:Color3] The color read from the BitBuffer.
+**--]]
+function BitBuffer:ReadColor3()
+	return Color3.fromRGB(self:ReadUnsigned(8), self:ReadUnsigned(8), self:ReadUnsigned(8))
+end
+
+--[[**
+	Writes a Vector3 to the BitBuffer. Writes with Float32 precision.
+	@param [t:Vector3] Vector The vector you want to write into the BitBuffer.
+	@returns [void]
+**--]]
+function BitBuffer:WriteVector3(Vector)
+	if typeof(Vector) ~= "Vector3" then
+		error(string.format("bad argument #1 in BitBuffer::WriteVector3 (Vector3 expected, instead got %s)", typeof(Vector)), 2)
+	end
+
+	self:WriteFloat32(Vector.X)
+	self:WriteFloat32(Vector.Y)
+	self:WriteFloat32(Vector.Z)
+end
+
+--[[**
+	Reads a Vector3 from the BitBuffer. Uses Float32 precision.
+	@returns [t:Vector3] The vector read from the BitBuffer.
+**--]]
+function BitBuffer:ReadVector3()
+	return Vector3.new(self:ReadFloat32(), self:ReadFloat32(), self:ReadFloat32())
+end
+
+--[[**
+	Writes a full CFrame (position and rotation) to the BitBuffer. Uses Float64 precision.
+	@param [t:CFrame] CoordinateFrame The CFrame you are writing to the BitBuffer.
+	@returns [void]
+**--]]
+function BitBuffer:WriteCFrame(CoordinateFrame)
+	if typeof(CoordinateFrame) ~= "CFrame" then
+		error(string.format("bad argument #1 in BitBuffer::WriteCFrame (CFrame expected, instead got %s)", typeof(CoordinateFrame)), 2)
+	end
+
+	self:WriteVector3Float64(CoordinateFrame.Position)
+	self:WriteRotation(CoordinateFrame)
+end
+
+--[[**
+	Reads a full CFrame (position and rotation) from the BitBuffer. Uses Float64 precision.
+	@returns [t:CFrame] The CFrame you are reading from the BitBuffer.
+**--]]
+function BitBuffer:ReadCFrame()
+	local Position = CFrame.new(self:ReadVector3Float64())
+
+	local Azumith = self:ReadSigned(22)
+	local Roll = self:ReadSigned(21)
+	local Elevation = self:ReadSigned(21)
+
+	Azumith = 3.1415926535898 * (Azumith / 2097151)
+	Roll = 3.1415926535898 * (Roll / 1048575)
+	Elevation = 3.1415926535898 * (Elevation / 1048575)
+
+	local Rotation = CFrame.Angles(0, Azumith, 0)
+	Rotation = Rotation * CFrame.Angles(Elevation, 0, 0)
+	Rotation = Rotation * CFrame.Angles(0, 0, Roll)
+
+	return Position * Rotation
+end
+
+--[[**
+	Writes a Vector2 to the BitBuffer. Writes with Float32 precision.
+	@param [t:Vector2] Vector The vector you want to write into the BitBuffer.
+	@returns [void]
+**--]]
+function BitBuffer:WriteVector2(Vector)
+	if typeof(Vector) ~= "Vector2" then
+		error(string.format("bad argument #1 in BitBuffer::WriteVector2 (Vector2 expected, instead got %s)", typeof(Vector)), 2)
+	end
+
+	self:WriteFloat32(Vector.X)
+	self:WriteFloat32(Vector.Y)
+end
+
+--[[**
+	Reads a Vector2 from the BitBuffer. Uses Float32 precision.
+	@returns [t:Vector2] The vector read from the BitBuffer.
+**--]]
+function BitBuffer:ReadVector2()
+	return Vector2.new(self:ReadFloat32(), self:ReadFloat32())
+end
+
+--[[**
+	Writes a UDim2 to the BitBuffer. Uses Float32 precision for the scale.
+	@param [t:UDim2] Value The UDim2 you are writing to the BitBuffer.
+	@returns [void]
+**--]]
+function BitBuffer:WriteUDim2(Value)
+	if typeof(Value) ~= "UDim2" then
+		error(string.format("bad argument #1 in BitBuffer::WriteUDim2 (UDim2 expected, instead got %s)", typeof(Value)), 2)
+	end
+
+	self:WriteFloat32(Value.X.Scale)
+	self:WriteSigned(17, Value.X.Offset)
+	self:WriteFloat32(Value.Y.Scale)
+	self:WriteSigned(17, Value.Y.Offset)
+end
+
+--[[**
+	Reads a UDim2 from the BitBuffer. Uses Float32 precision for the scale.
+	@returns [t:UDim2] The UDim2 read from the BitBuffer.
+**--]]
+function BitBuffer:ReadUDim2()
+	return UDim2.new(self:ReadFloat32(), self:ReadSigned(17), self:ReadFloat32(), self:ReadSigned(17))
+end
+
+--[[**
+	Writes a Vector3 to the BitBuffer. Writes with Float64 precision.
+	@param [t:Vector3] Vector The vector you want to write into the BitBuffer.
+	@returns [void]
+**--]]
+function BitBuffer:WriteVector3Float64(Vector)
+	if typeof(Vector) ~= "Vector3" then
+		error(string.format("bad argument #1 in BitBuffer::WriteVector3Float64 (Vector3 expected, instead got %s)", typeof(Vector)), 2)
+	end
+
+	self:WriteFloat64(Vector.X)
+	self:WriteFloat64(Vector.Y)
+	self:WriteFloat64(Vector.Z)
+end
+
+--[[**
+	Reads a Vector3 from the BitBuffer. Reads with Float64 precision.
+	@returns [t:Vector3] The vector read from the BitBuffer.
+**--]]
+function BitBuffer:ReadVector3Float64()
+	return Vector3.new(self:ReadFloat64(), self:ReadFloat64(), self:ReadFloat64())
+end
+
+--[[**
+	Writes a Vector2 to the BitBuffer. Writes with Float64 precision.
+	@param [t:Vector2] Vector The vector you want to write into the BitBuffer.
+	@returns [void]
+**--]]
+function BitBuffer:WriteVector2Float64(Vector)
+	if typeof(Vector) ~= "Vector2" then
+		error(string.format("bad argument #1 in BitBuffer::WriteVector2Float64 (Vector2 expected, instead got %s)", typeof(Vector)), 2)
+	end
+
+	self:WriteFloat64(Vector.X)
+	self:WriteFloat64(Vector.Y)
+end
+
+--[[**
+	Reads a Vector2 from the BitBuffer. Reads with Float64 precision.
+	@returns [t:Vector2] The vector read from the BitBuffer.
+**--]]
+function BitBuffer:ReadVector2Float64()
+	return Vector2.new(self:ReadFloat64(), self:ReadFloat64())
+end
+
+BitBuffer.WriteVector3Float32 = BitBuffer.WriteVector3
+BitBuffer.ReadVector3Float32 = BitBuffer.ReadVector3
+
+BitBuffer.WriteVector2Float32 = BitBuffer.WriteVector2
+BitBuffer.ReadVector2Float32 = BitBuffer.ReadVector2
+
+--[[**
+	Destroys the BitBuffer metatable.
+	@returns [void]
+**--]]
+function BitBuffer:Destroy()
+	self.mBitBuffer = {}
+	self.BitPointer = 0
+	self.mBitBuffer = nil
+	setmetatable(self, nil)
+end
+
+--[[**
+	Calculates the amount of bits needed for a given number.
+	@param [t:number] Number The number you want to use.
+	@returns [t:number] The amount of bits needed.
+**--]]
+function BitBuffer.BitsNeeded(Number)
+	if type(Number) ~= "number" then
+		error(string.format("bad argument #1 in BitBuffer.BitsNeeded (number expected, instead got %s)", typeof(Number)), 2)
+	end
+
+	local Bits = math.log10(Number + 1) / LOG_10_OF_2
+	return math.ceil(Bits)
+end
+
+-- Lower camel case support!
+BitBuffer.fromString = BitBuffer.FromString
+BitBuffer.toBase64 = BitBuffer.ToBase64
+BitBuffer.toBase128 = BitBuffer.ToBase128
+BitBuffer.readVector3Float64 = BitBuffer.ReadVector3Float64
+BitBuffer.readUnsigned = BitBuffer.ReadUnsigned
+BitBuffer.writeBoolean = BitBuffer.WriteBoolean
+BitBuffer.bitsNeeded = BitBuffer.BitsNeeded
+BitBuffer.readSigned = BitBuffer.ReadSigned
+BitBuffer.readFloat8 = BitBuffer.ReadFloat8
+BitBuffer.readFloat16 = BitBuffer.ReadFloat16
+BitBuffer.readString = BitBuffer.ReadString
+BitBuffer.readVector2Float64 = BitBuffer.ReadVector2Float64
+BitBuffer.destroy = BitBuffer.Destroy
+BitBuffer.readColor3 = BitBuffer.ReadColor3
+BitBuffer.writeVector2Float64 = BitBuffer.WriteVector2Float64
+BitBuffer.readVector2 = BitBuffer.ReadVector2
+BitBuffer.readBool = BitBuffer.ReadBool
+BitBuffer.readBrickColor = BitBuffer.ReadBrickColor
+BitBuffer.dump = BitBuffer.Dump
+BitBuffer.readVector3Float32 = BitBuffer.ReadVector3Float32
+BitBuffer.writeVector3Float32 = BitBuffer.WriteVector3Float32
+BitBuffer.writeVector3Float64 = BitBuffer.WriteVector3Float64
+BitBuffer.readRotation = BitBuffer.ReadRotation
+BitBuffer.writeVector2 = BitBuffer.WriteVector2
+BitBuffer.readCFrame = BitBuffer.ReadCFrame
+BitBuffer.writeFloat16 = BitBuffer.WriteFloat16
+BitBuffer.writeRotation = BitBuffer.WriteRotation
+BitBuffer.writeVector2Float32 = BitBuffer.WriteVector2Float32
+BitBuffer.readUDim2 = BitBuffer.ReadUDim2
+BitBuffer.writeCFrame = BitBuffer.WriteCFrame
+BitBuffer.readVector3 = BitBuffer.ReadVector3
+BitBuffer.readFloat = BitBuffer.ReadFloat
+BitBuffer.writeUnsigned = BitBuffer.WriteUnsigned
+BitBuffer.writeVector3 = BitBuffer.WriteVector3
+BitBuffer.readVector2Float32 = BitBuffer.ReadVector2Float32
+BitBuffer.writeColor3 = BitBuffer.WriteColor3
+BitBuffer.writeUDim2 = BitBuffer.WriteUDim2
+BitBuffer.writeBrickColor = BitBuffer.WriteBrickColor
+BitBuffer.fromBase128 = BitBuffer.FromBase128
+BitBuffer.readBoolean = BitBuffer.ReadBoolean
+BitBuffer.writeFloat64 = BitBuffer.WriteFloat64
+BitBuffer.writeBool = BitBuffer.WriteBool
+BitBuffer.readFloat32 = BitBuffer.ReadFloat32
+BitBuffer.writeFloat32 = BitBuffer.WriteFloat32
+BitBuffer.writeFloat8 = BitBuffer.WriteFloat8
+BitBuffer.toString = BitBuffer.ToString
+BitBuffer.writeSigned = BitBuffer.WriteSigned
+BitBuffer.writeString = BitBuffer.WriteString
+BitBuffer.writeFloat = BitBuffer.WriteFloat
+BitBuffer.readFloat64 = BitBuffer.ReadFloat64
+BitBuffer.fromBase64 = BitBuffer.FromBase64
+BitBuffer.resetPointer = BitBuffer.ResetPointer
+BitBuffer.reset = BitBuffer.Reset
+
+return BitBuffer
+]]></ProtectedString>
+				<BinaryString name="Tags"></BinaryString>
+			</Properties>
+		</Item>
+		<Item class="ModuleScript" referent="RBX7423954E916C4688B0B96573078887B5">
+			<Properties>
+				<BinaryString name="AttributesSerialize"></BinaryString>
+				<Content name="LinkedSource"><null></null></Content>
+				<string name="Name">DumpParser</string>
+				<string name="ScriptGuid">{EA15F324-C7CC-477C-802E-85E6432F6358}</string>
+				<ProtectedString name="Source"><![CDATA[local Config = require(script.Config)
+local http = require(script.Request)
+
+local Parser = {
+	_classes = {}
+}
+
+local clireq = http.default({
+	url = Config.dumpUrl,
+	json = true
+})
+
+--[[
+local function IF(Condition, IfTrue, IfFalse, ...)
+	if (type(Condition) == "function" and Condition(...) or Condition) then
+		return IfTrue
+	end
+
+	return IfFalse
+end
+
+local function RecursiveMerge(origin, ...)
+	local tables = {...}
+
+	for _, currentTable in next, tables do
+		if (type(currentTable) == "table") then
+			for key, value in next, currentTable do
+				if (type(origin[key]) == "table" and type(currentTable[key]) == "table") then
+					origin[key] = RecursiveMerge(origin[key], currentTable[key])
+				else
+					origin[key] = value
+				end
+			end
+		end
+	end
+
+	return origin
+end
+--]]
+
+local function FilterTable(origin, filterFn)
+	local filterResults = {}
+	for index, value in ipairs(origin) do
+		if (filterFn(value, index, origin)) then
+			filterResults[#filterResults + 1] = value
+		end
+	end
+
+	return filterResults
+end
+
+local function FindInTable(Needle, Haystack)
+	for key, value in next, Haystack do
+		if (value == Needle) then
+			return true
+		end
+	end
+end
+
+function Parser:GetDump()
+	if not (Parser._dump and Parser._dump.Classes) then
+		local ok, dump = clireq:async():await()
+		assert(ok, dump)
+
+		Parser._dump = dump
+	end
+
+	assert(Parser._dump.Classes, "Classes not present in client dump")
+	return Parser._dump
+end
+
+function Parser:FindClassInDump(ClassName)
+	ClassName = string.lower(ClassName)
+	local dump = Parser:GetDump()
+
+	for _, classMember in next, dump.Classes do
+		local memberName = string.lower(classMember.Name)
+
+		if (memberName == ClassName) then
+			return classMember
+		end
+	end
+end
+
+function Parser:GetClassInheritance(ClassName)
+	local inheritance = {}
+
+	inheritance[1] = Parser:FindClassInDump(ClassName)
+	assert(inheritance[1], string.format("Class \"%s\" not found in client dump", ClassName))
+
+	while (inheritance[#inheritance].Superclass ~= Config.rootClass) do
+		local prevClass = inheritance[#inheritance]
+		local nextClass = Parser:FindClassInDump(prevClass.Superclass)
+
+		if (not nextClass) then break end
+		inheritance[#inheritance + 1] = nextClass
+	end
+
+	local returnArray = {}
+	for index = #inheritance, 1, -1 do
+		returnArray[#returnArray + 1] = inheritance[index]
+	end
+
+	return #returnArray > 0 and returnArray
+end
+
+function Parser:BuildClass(ClassName)
+	local lowerClassName = string.lower(ClassName)
+
+	if (Parser._classes[lowerClassName]) then
+		return Parser._classes[lowerClassName]
+	end
+
+	local formedClass
+
+	local inheritance = Parser:GetClassInheritance(ClassName)
+	assert(inheritance, string.format("Couldn't build inheritance array for \"%s\"", ClassName))
+
+	local index, memberHistory, registeredMembers = 0, {}, {}
+	for _, ancestor in next, inheritance do
+		index = index + 1
+
+		if (index == 1) then
+			formedClass = ancestor
+
+			if (formedClass.Members) then
+				for _, member in ipairs(formedClass.Members) do
+					registeredMembers[#registeredMembers + 1] = member.Name
+				end
+			end
+		else
+			for key, value in next, ancestor do
+				if (key == "Members") then
+					memberHistory[#memberHistory + 1] = value
+				else
+					formedClass[key] = value
+				end
+			end
+		end
+	end
+
+	if (not formedClass.Members) then
+		formedClass.Members = {}
+	end
+
+	for _, memberTable in ipairs(memberHistory) do
+		for _, member in ipairs(memberTable) do
+			if (not FindInTable(member.Name, registeredMembers)) then
+				formedClass.Members[#formedClass.Members + 1] = member
+				registeredMembers[#registeredMembers + 1] = member.Name
+			end
+		end
+	end
+
+	assert(formedClass, string.format("Couldn't build class for \"%s\"", ClassName))
+	Parser._classes[lowerClassName] = formedClass
+
+	return formedClass
+end
+
+function Parser:FilterMembers(ClassName, MemberType)
+	local class = Parser:BuildClass(ClassName)
+	if (not class.Members) then return {} end
+
+	return FilterTable(class.Members, function(member)
+		return member.MemberType == MemberType
+	end)
+end
+
+function Parser:GetPropertiesRaw(ClassName)
+	return Parser:FilterMembers(ClassName, "Property")
+end
+
+function Parser:GetPropertiesSafeRaw(ClassName)
+	return FilterTable(Parser:GetPropertiesRaw(ClassName), function(property)
+		local tags = property.Tags or {}
+		local security = property.Security
+
+		local insecure = (property.Security.Read == "None" and property.Security.Write == "None")
+		local safeTags = not (
+			FindInTable("ReadOnly", tags) or FindInTable("Deprecated", tags) or FindInTable("RobloxSecurity", tags)
+			or FindInTable("NotAccessibleSecurity", tags) or FindInTable("RobloxScriptSecurity", tags) or
+			FindInTable("NotScriptable", tags)
+		)
+
+		return ((#tags == 0 or safeTags) and insecure)
+	end)
+end
+
+function Parser:GetPropertyListAll(ClassName)
+	local propertiesRaw, properties = Parser:GetPropertiesRaw(ClassName), {}
+
+	for _, property in next, propertiesRaw do
+		properties[#properties + 1] = property.Name
+	end
+
+	return properties
+end
+
+function Parser:GetPropertyList(ClassName)
+	local propertiesRaw, properties = Parser:GetPropertiesSafeRaw(ClassName), {}
+
+	for _, property in next, propertiesRaw do
+		properties[#properties + 1] = property.Name
+	end
+
+	return properties
+end
+
+return Parser
+]]></ProtectedString>
+				<BinaryString name="Tags"></BinaryString>
+			</Properties>
+			<Item class="ModuleScript" referent="RBX84AF04A0AE464295BD2DF80234DC73EA">
+				<Properties>
+					<BinaryString name="AttributesSerialize"></BinaryString>
+					<Content name="LinkedSource"><null></null></Content>
+					<string name="Name">Config</string>
+					<string name="ScriptGuid">{8C717936-868E-4D5B-A47D-38E68426B72B}</string>
+					<ProtectedString name="Source"><![CDATA[return {
+	dumpUrl = "https://raw.githubusercontent.com/CloneTrooper1019/Roblox-Client-Tracker/roblox/API-Dump.json",
+	rootClass = "<<<ROOT>>>"
+}
+]]></ProtectedString>
+					<BinaryString name="Tags"></BinaryString>
+				</Properties>
+			</Item>
+		</Item>
+		<Item class="ModuleScript" referent="RBX200CA42B155847A6A77225B1BA600F6A">
+			<Properties>
+				<BinaryString name="AttributesSerialize"></BinaryString>
+				<Content name="LinkedSource"><null></null></Content>
+				<string name="Name">Request</string>
+				<string name="ScriptGuid"></string>
+				<ProtectedString name="Source"><![CDATA[local http = game:GetService("HttpService")
+local Promise = require(script.Promise)
+local httpRequest = {}
+
+local function noop(...) return ... end
+
+httpRequest.__index = httpRequest
+httpRequest._default = {
+	baseUrl = "", -- Can be used to set a domain or route to request from.
+	url = "", -- Will be appended to "baseUrl" if specified.
+	method = "GET", -- The HTTP method to use in the request.
+	json = true, -- Automatically decode response body from JSON format.
+	resolveWithFullResponse = false, -- Whether only the response body should be returned. **Async only!**
+	body = nil, -- Usually a string to pass as the request body.
+	headers = nil, -- A dictionary of headers to send with the request.
+}
+
+local function cloneTable(source)
+	if (type(source) == "table") then
+		local cloned = {}
+
+		for key, value in next, source do
+			cloned[cloneTable(key)] = cloneTable(value)
+		end
+
+		return cloned
+	end
+
+	return source
+end
+
+local function mergeTables(source, ...)
+	local tables = {...}
+
+	for _, nextTable in next, tables do
+		if (type(nextTable) == "table") then
+			for key, value in next, nextTable do
+				if (type(source[key]) == "table" and type(value) == "table") then
+					source[key] = mergeTables(source[key], value)
+				else
+					source[key] = value
+				end
+			end
+		end
+	end
+
+	return source
+end
+
+function httpRequest.toJSON(data)
+	return http:JSONEncode(data)
+end
+
+function httpRequest.fromJSON(str)
+	return http:JSONDecode(str)
+end
+
+function httpRequest.default(options)
+	local self = setmetatable({}, httpRequest)
+	self.__index = self
+
+	self._default = mergeTables(self._default, options)
+
+	return self
+end
+
+function httpRequest:__call(options, callback)
+	if (type(callback) ~= "function") then callback = noop end
+	if (type(options) == "string") then options = { url = options } end
+
+	local requestOpts = mergeTables(cloneTable(self._default), options)
+	local isJSON = requestOpts.json
+
+	if (isJSON and requestOpts.Body) then
+		-- Set "Content-Type" to "application/json" for JSON requests.
+		if (type(requestOpts.headers) == "table") then
+			local contentTypeHeader = "Content-Type"
+
+			for key, _ in next, requestOpts.headers do
+				if (string.lower(key) == "content-type") then
+					contentTypeHeader = key
+					break
+				end
+			end
+
+			requestOpts.headers = mergeTables({
+				[contentTypeHeader] = "application/json"
+			}, requestOpts.headers)
+		else
+			requestOpts.headers = {
+				["Content-Type"] = "application/json"
+			}
+		end
+	end
+
+	-- Wrapped to prevent "HTTP Requests are not enabled!" spam.
+	coroutine.wrap(function()
+		local body = (type(requestOpts.body) == "table" and isJSON) and httpRequest.toJSON(requestOpts.body) or requestOpts.body
+		local requestBegin = os.time()
+
+		local ok, data = pcall(function()
+			return http:RequestAsync({
+				Url = requestOpts.baseUrl .. requestOpts.url,
+				Method = requestOpts.method,
+				Headers = requestOpts.headers,
+				Body = body
+			})
+		end)
+
+		if (not ok) then return callback(data) end
+
+		data.ResponseTime = (os.time() - requestBegin)
+		if (isJSON) then data.Body = httpRequest.fromJSON(data.Body) end
+
+		return callback(nil, data, data.Body)
+	end)()
+end
+
+function httpRequest:async(options)
+	if (type(options) == "string") then options = { url = options } end
+	options = (type(options) == "table") and options or {}
+
+	return Promise.new(function(resolve, reject)
+		self(options, function(err, response, body)
+			if (err) then return reject(err) end
+
+			if (options.resolveWithFullResponse) then
+				return resolve(response, body)
+			end
+
+			return resolve(body)
+		end)
+	end)
+end
+
+return setmetatable({}, httpRequest)
+]]></ProtectedString>
+				<BinaryString name="Tags"></BinaryString>
+			</Properties>
+			<Item class="ModuleScript" referent="RBXD2D99547F33E4F9FB1E083D22CFFEC5F">
+				<Properties>
+					<BinaryString name="AttributesSerialize"></BinaryString>
+					<Content name="LinkedSource"><null></null></Content>
+					<string name="Name">Promise</string>
+					<string name="ScriptGuid">{D0DBB26E-1ECD-4092-8D30-5145DF7D27D7}</string>
+					<ProtectedString name="Source"><![CDATA[--[[
+	An implementation of Promises similar to Promise/A+.
+]]
+
+local ERROR_YIELD_NEW = "Yielding inside Promise.new is not allowed! Use Promise.async or create a new thread in the Promise executor!"
+local ERROR_YIELD_THEN = "Yielding inside andThen/catch is not allowed! Instead, return a new Promise from andThen/catch."
+local ERROR_NON_PROMISE_IN_LIST = "Non-promise value passed into %s at index %s"
+local ERROR_NON_LIST = "Please pass a list of promises to %s"
+local ERROR_NON_FUNCTION = "Please pass a handler function to %s!"
+
+local RunService = game:GetService("RunService")
+
+--[[
+	Packs a number of arguments into a table and returns its length.
+
+	Used to cajole varargs without dropping sparse values.
+]]
+local function pack(...)
+	return select("#", ...), { ... }
+end
+
+--[[
+	Returns first value (success), and packs all following values.
+]]
+local function packResult(success, ...)
+	return success, select("#", ...), { ... }
+end
+
+--[[
+	Calls a non-yielding function in a new coroutine.
+
+	Handles errors if they happen.
+]]
+local function runExecutor(yieldError, traceback, callback, ...)
+	-- Wrapped because C functions can't be passed to coroutine.create!
+	local co = coroutine.create(function(...)
+		return callback(...)
+	end)
+
+	local ok, len, result = packResult(coroutine.resume(co, ...))
+
+	if ok and coroutine.status(co) ~= "dead" then
+		error(yieldError .. "\n" .. traceback, 2)
+	end
+
+	return ok, len, result
+end
+
+--[[
+	Creates a function that invokes a callback with correct error handling and
+	resolution mechanisms.
+]]
+local function createAdvancer(traceback, callback, resolve, reject)
+	return function(...)
+		local ok, resultLength, result = runExecutor(ERROR_YIELD_THEN, traceback, callback, ...)
+
+		if ok then
+			resolve(unpack(result, 1, resultLength))
+		else
+			reject(result[1] .. "\n" .. traceback)
+		end
+	end
+end
+
+local function isEmpty(t)
+	return next(t) == nil
+end
+
+local Promise = {}
+Promise.prototype = {}
+Promise.__index = Promise.prototype
+
+Promise.Status = setmetatable({
+	Started = "Started",
+	Resolved = "Resolved",
+	Rejected = "Rejected",
+	Cancelled = "Cancelled",
+}, {
+	__index = function(_, k)
+		error(("%s is not in Promise.Status!"):format(k), 2)
+	end
+})
+
+--[[
+	Constructs a new Promise with the given initializing callback.
+
+	This is generally only called when directly wrapping a non-promise API into
+	a promise-based version.
+
+	The callback will receive 'resolve' and 'reject' methods, used to start
+	invoking the promise chain.
+
+	Second parameter, parent, is used internally for tracking the "parent" in a
+	promise chain. External code shouldn't need to worry about this.
+]]
+function Promise.new(callback, parent)
+	if parent ~= nil and not Promise.is(parent) then
+		error("Argument #2 to Promise.new must be a promise or nil", 2)
+	end
+
+	local self = {
+		-- Used to locate where a promise was created
+		_source = debug.traceback(),
+
+		_status = Promise.Status.Started,
+
+		-- Will be set to the Lua error string if it occurs while executing.
+		_error = nil,
+
+		-- A table containing a list of all results, whether success or failure.
+		-- Only valid if _status is set to something besides Started
+		_values = nil,
+
+		-- Lua doesn't like sparse arrays very much, so we explicitly store the
+		-- length of _values to handle middle nils.
+		_valuesLength = -1,
+
+		-- Tracks if this Promise has no error observers..
+		_unhandledRejection = true,
+
+		-- Queues representing functions we should invoke when we update!
+		_queuedResolve = {},
+		_queuedReject = {},
+		_queuedFinally = {},
+
+		-- The function to run when/if this promise is cancelled.
+		_cancellationHook = nil,
+
+		-- The "parent" of this promise in a promise chain. Required for
+		-- cancellation propagation.
+		_parent = parent,
+
+		_consumers = setmetatable({}, {
+			__mode = "k";
+		}),
+	}
+
+	if parent and parent._status == Promise.Status.Started then
+		parent._consumers[self] = true
+	end
+
+	setmetatable(self, Promise)
+
+	local function resolve(...)
+		self:_resolve(...)
+	end
+
+	local function reject(...)
+		self:_reject(...)
+	end
+
+	local function onCancel(cancellationHook)
+		if cancellationHook then
+			if self._status == Promise.Status.Cancelled then
+				cancellationHook()
+			else
+				self._cancellationHook = cancellationHook
+			end
+		end
+
+		return self._status == Promise.Status.Cancelled
+	end
+
+	local ok, _, result = runExecutor(
+		ERROR_YIELD_NEW,
+		self._source,
+		callback,
+		resolve,
+		reject,
+		onCancel
+	)
+
+	if not ok then
+		self._error = result[1] or "error"
+		reject((result[1] or "error") .. "\n" .. self._source)
+	end
+
+	return self
+end
+
+function Promise._newWithSelf(executor, ...)
+	local args
+	local promise = Promise.new(function(...)
+		args = { ... }
+	end, ...)
+
+	-- we don't handle the length here since `args` will always be { resolve, reject, onCancelHook }
+	executor(promise, unpack(args))
+
+	return promise
+end
+
+function Promise._new(traceback, executor, ...)
+	return Promise._newWithSelf(function(self, ...)
+		self._source = traceback
+		executor(...)
+	end, ...)
+end
+
+--[[
+	Promise.new, except pcall on a new thread is automatic.
+]]
+function Promise.async(callback)
+	local traceback = debug.traceback()
+	local promise
+	promise = Promise._new(traceback, function(resolve, reject, onCancel)
+		local connection
+		connection = RunService.Heartbeat:Connect(function()
+			connection:Disconnect()
+			local ok, err = pcall(callback, resolve, reject, onCancel)
+
+			if not ok then
+				promise._error = err or "error"
+				reject(err .. "\n" .. traceback)
+			end
+		end)
+	end)
+
+	return promise
+end
+
+--[[
+	Create a promise that represents the immediately resolved value.
+]]
+function Promise.resolve(...)
+	local length, values = pack(...)
+	return Promise._new(debug.traceback(), function(resolve)
+		resolve(unpack(values, 1, length))
+	end)
+end
+
+--[[
+	Create a promise that represents the immediately rejected value.
+]]
+function Promise.reject(...)
+	local length, values = pack(...)
+	return Promise._new(debug.traceback(), function(_, reject)
+		reject(unpack(values, 1, length))
+	end)
+end
+
+--[[
+	Begins a Promise chain, turning synchronous errors into rejections.
+]]
+function Promise.try(...)
+	return Promise.resolve():andThenCall(...)
+end
+
+--[[
+	Returns a new promise that:
+		* is resolved when all input promises resolve
+		* is rejected if ANY input promises reject
+]]
+function Promise._all(traceback, promises, amount)
+	if type(promises) ~= "table" then
+		error(ERROR_NON_LIST:format("Promise.all"), 3)
+	end
+
+	-- We need to check that each value is a promise here so that we can produce
+	-- a proper error rather than a rejected promise with our error.
+	for i, promise in pairs(promises) do
+		if not Promise.is(promise) then
+			error((ERROR_NON_PROMISE_IN_LIST):format("Promise.all", tostring(i)), 3)
+		end
+	end
+
+	-- If there are no values then return an already resolved promise.
+	if #promises == 0 or amount == 0 then
+		return Promise.resolve({})
+	end
+
+	return Promise._newWithSelf(function(self, resolve, reject, onCancel)
+		self._source = traceback
+
+		-- An array to contain our resolved values from the given promises.
+		local resolvedValues = {}
+		local newPromises = {}
+
+		-- Keep a count of resolved promises because just checking the resolved
+		-- values length wouldn't account for promises that resolve with nil.
+		local resolvedCount = 0
+		local rejectedCount = 0
+		local done = false
+
+		local function cancel()
+			for _, promise in ipairs(newPromises) do
+				promise:cancel()
+			end
+		end
+
+		-- Called when a single value is resolved and resolves if all are done.
+		local function resolveOne(i, ...)
+			if done then
+				return
+			end
+
+			resolvedCount = resolvedCount + 1
+
+			if amount == nil then
+				resolvedValues[i] = ...
+			else
+				resolvedValues[resolvedCount] = ...
+			end
+
+			if resolvedCount >= (amount or #promises) then
+				done = true
+				resolve(resolvedValues)
+				cancel()
+			end
+		end
+
+		onCancel(cancel)
+
+		-- We can assume the values inside `promises` are all promises since we
+		-- checked above.
+		for i, promise in ipairs(promises) do
+			table.insert(
+				newPromises,
+				promise:andThen(
+					function(...)
+						resolveOne(i, ...)
+					end,
+					function(...)
+						rejectedCount = rejectedCount + 1
+
+						if amount == nil or #promises - rejectedCount < amount then
+							cancel()
+							done = true
+
+							reject(...)
+						end
+					end
+				)
+			)
+		end
+
+		if done then
+			cancel()
+		end
+	end)
+end
+
+function Promise.all(promises)
+	return Promise._all(debug.traceback(), promises)
+end
+
+function Promise.some(promises, amount)
+	assert(type(amount) == "number", "Bad argument #2 to Promise.some: must be a number")
+
+	return Promise._all(debug.traceback(), promises, amount)
+end
+
+function Promise.any(promises)
+	return Promise._all(debug.traceback(), promises, 1):andThen(function(values)
+		return values[1]
+	end)
+end
+
+function Promise.allSettled(promises)
+	if type(promises) ~= "table" then
+		error(ERROR_NON_LIST:format("Promise.allSettled"), 2)
+	end
+
+	-- We need to check that each value is a promise here so that we can produce
+	-- a proper error rather than a rejected promise with our error.
+	for i, promise in pairs(promises) do
+		if not Promise.is(promise) then
+			error((ERROR_NON_PROMISE_IN_LIST):format("Promise.allSettled", tostring(i)), 2)
+		end
+	end
+
+	-- If there are no values then return an already resolved promise.
+	if #promises == 0 then
+		return Promise.resolve({})
+	end
+
+	return Promise._new(debug.traceback(), function(resolve, _, onCancel)
+		-- An array to contain our resolved values from the given promises.
+		local fates = {}
+		local newPromises = {}
+
+		-- Keep a count of resolved promises because just checking the resolved
+		-- values length wouldn't account for promises that resolve with nil.
+		local finishedCount = 0
+
+		-- Called when a single value is resolved and resolves if all are done.
+		local function resolveOne(i, ...)
+			finishedCount = finishedCount + 1
+
+			fates[i] = ...
+
+			if finishedCount >= #promises then
+				resolve(fates)
+			end
+		end
+
+		onCancel(function()
+			for _, promise in ipairs(newPromises) do
+				promise:cancel()
+			end
+		end)
+
+		-- We can assume the values inside `promises` are all promises since we
+		-- checked above.
+		for i, promise in ipairs(promises) do
+			table.insert(
+				newPromises,
+				promise:finally(
+					function(...)
+						resolveOne(i, ...)
+					end
+				)
+			)
+		end
+	end)
+end
+
+--[[
+	Races a set of Promises and returns the first one that resolves,
+	cancelling the others.
+]]
+function Promise.race(promises)
+	assert(type(promises) == "table", ERROR_NON_LIST:format("Promise.race"))
+
+	for i, promise in pairs(promises) do
+		assert(Promise.is(promise), (ERROR_NON_PROMISE_IN_LIST):format("Promise.race", tostring(i)))
+	end
+
+	return Promise._new(debug.traceback(), function(resolve, reject, onCancel)
+		local newPromises = {}
+		local finished = false
+
+		local function cancel()
+			for _, promise in ipairs(newPromises) do
+				promise:cancel()
+			end
+		end
+
+		local function finalize(callback)
+			return function (...)
+				cancel()
+				finished = true
+				return callback(...)
+			end
+		end
+
+		if onCancel(finalize(reject)) then
+			return
+		end
+
+		for _, promise in ipairs(promises) do
+			table.insert(
+				newPromises,
+				promise:andThen(finalize(resolve), finalize(reject))
+			)
+		end
+
+		if finished then
+			cancel()
+		end
+	end)
+end
+
+--[[
+	Is the given object a Promise instance?
+]]
+function Promise.is(object)
+	if type(object) ~= "table" then
+		return false
+	end
+
+	return type(object.andThen) == "function"
+end
+
+--[[
+	Converts a yielding function into a Promise-returning one.
+]]
+function Promise.promisify(callback)
+	return function(...)
+		local traceback = debug.traceback()
+		local length, values = pack(...)
+		return Promise._new(traceback, function(resolve, reject)
+			coroutine.wrap(function()
+				local ok, resultLength, resultValues = packResult(pcall(callback, unpack(values, 1, length)))
+				if ok then
+					resolve(unpack(resultValues, 1, resultLength))
+				else
+					reject((resultValues[1] or "error") .. "\n" .. traceback)
+				end
+			end)()
+		end)
+	end
+end
+
+--[[
+	Creates a Promise that resolves after given number of seconds.
+]]
+do
+	-- uses a sorted doubly linked list (queue) to achieve O(1) remove operations and O(n) for insert
+
+	-- the initial node in the linked list
+	local first
+	local connection
+
+	function Promise.delay(seconds)
+		assert(type(seconds) == "number", "Bad argument #1 to Promise.delay, must be a number.")
+		-- If seconds is -INF, INF, NaN, or less than 1 / 60, assume seconds is 1 / 60.
+		-- This mirrors the behavior of wait()
+		if not (seconds >= 1 / 60) or seconds == math.huge then
+			seconds = 1 / 60
+		end
+
+		return Promise._new(debug.traceback(), function(resolve, _, onCancel)
+			local startTime = tick()
+			local endTime = startTime + seconds
+
+			local node = {
+				resolve = resolve,
+				startTime = startTime,
+				endTime = endTime
+			}
+
+			if connection == nil then -- first is nil when connection is nil
+				first = node
+				connection = RunService.Heartbeat:Connect(function()
+					local currentTime = tick()
+
+					while first.endTime <= currentTime do
+						first.resolve(currentTime - first.startTime)
+						first = first.next
+						if first == nil then
+							connection:Disconnect()
+							connection = nil
+							break
+						end
+						first.previous = nil
+						currentTime = tick()
+					end
+				end)
+			else -- first is non-nil
+				if first.endTime < endTime then -- if `node` should be placed after `first`
+					-- we will insert `node` between `current` and `next`
+					-- (i.e. after `current` if `next` is nil)
+					local current = first
+					local next = current.next
+
+					while next ~= nil and next.endTime < endTime do
+						current = next
+						next = current.next
+					end
+
+					-- `current` must be non-nil, but `next` could be `nil` (i.e. last item in list)
+					current.next = node
+					node.previous = current
+
+					if next ~= nil then
+						node.next = next
+						next.previous = node
+					end
+				else
+					-- set `node` to `first`
+					node.next = first
+					first.previous = node
+					first = node
+				end
+			end
+
+			onCancel(function()
+				-- remove node from queue
+				local next = node.next
+
+				if first == node then
+					if next == nil then -- if `node` is the first and last
+						connection:Disconnect()
+						connection = nil
+					else -- if `node` is `first` and not the last
+						next.previous = nil
+					end
+					first = next
+				else
+					local previous = node.previous
+					-- since `node` is not `first`, then we know `previous` is non-nil
+					previous.next = next
+
+					if next ~= nil then
+						next.previous = previous
+					end
+				end
+			end)
+		end)
+	end
+end
+
+--[[
+	Rejects the promise after `seconds` seconds.
+]]
+function Promise.prototype:timeout(seconds, timeoutValue)
+	return Promise.race({
+		Promise.delay(seconds):andThen(function()
+			return Promise.reject(timeoutValue == nil and "Timed out" or timeoutValue)
+		end),
+		self
+	})
+end
+
+function Promise.prototype:getStatus()
+	return self._status
+end
+
+--[[
+	Creates a new promise that receives the result of this promise.
+
+	The given callbacks are invoked depending on that result.
+]]
+function Promise.prototype:_andThen(traceback, successHandler, failureHandler)
+	self._unhandledRejection = false
+
+	-- Create a new promise to follow this part of the chain
+	return Promise._new(traceback, function(resolve, reject)
+		-- Our default callbacks just pass values onto the next promise.
+		-- This lets success and failure cascade correctly!
+
+		local successCallback = resolve
+		if successHandler then
+			successCallback = createAdvancer(
+				traceback,
+				successHandler,
+				resolve,
+				reject
+			)
+		end
+
+		local failureCallback = reject
+		if failureHandler then
+			failureCallback = createAdvancer(
+				traceback,
+				failureHandler,
+				resolve,
+				reject
+			)
+		end
+
+		if self._status == Promise.Status.Started then
+			-- If we haven't resolved yet, put ourselves into the queue
+			table.insert(self._queuedResolve, successCallback)
+			table.insert(self._queuedReject, failureCallback)
+		elseif self._status == Promise.Status.Resolved then
+			-- This promise has already resolved! Trigger success immediately.
+			successCallback(unpack(self._values, 1, self._valuesLength))
+		elseif self._status == Promise.Status.Rejected then
+			-- This promise died a terrible death! Trigger failure immediately.
+			failureCallback(unpack(self._values, 1, self._valuesLength))
+		elseif self._status == Promise.Status.Cancelled then
+			-- We don't want to call the success handler or the failure handler,
+			-- we just reject this promise outright.
+			reject("Promise is cancelled")
+		end
+	end, self)
+end
+
+function Promise.prototype:andThen(successHandler, failureHandler)
+	assert(
+		successHandler == nil or type(successHandler) == "function",
+		ERROR_NON_FUNCTION:format("Promise:andThen")
+	)
+	assert(
+		failureHandler == nil or type(failureHandler) == "function",
+		ERROR_NON_FUNCTION:format("Promise:andThen")
+	)
+
+	return self:_andThen(debug.traceback(), successHandler, failureHandler)
+end
+
+--[[
+	Used to catch any errors that may have occurred in the promise.
+]]
+function Promise.prototype:catch(failureCallback)
+	assert(
+		failureCallback == nil or type(failureCallback) == "function",
+		ERROR_NON_FUNCTION:format("Promise:catch")
+	)
+	return self:_andThen(debug.traceback(), nil, failureCallback)
+end
+
+--[[
+	Like andThen, but the value passed into the handler is also the
+	value returned from the handler.
+]]
+function Promise.prototype:tap(tapCallback)
+	assert(type(tapCallback) == "function", ERROR_NON_FUNCTION:format("Promise:tap"))
+	return self:_andThen(debug.traceback(), function(...)
+		local callbackReturn = tapCallback(...)
+
+		if Promise.is(callbackReturn) then
+			local length, values = pack(...)
+			return callbackReturn:andThen(function()
+				return unpack(values, 1, length)
+			end)
+		end
+
+		return ...
+	end)
+end
+
+--[[
+	Calls a callback on `andThen` with specific arguments.
+]]
+function Promise.prototype:andThenCall(callback, ...)
+	assert(type(callback) == "function", ERROR_NON_FUNCTION:format("Promise:andThenCall"))
+	local length, values = pack(...)
+	return self:_andThen(debug.traceback(), function()
+		return callback(unpack(values, 1, length))
+	end)
+end
+
+--[[
+	Shorthand for an andThen handler that returns the given value.
+]]
+function Promise.prototype:andThenReturn(...)
+	local length, values = pack(...)
+	return self:_andThen(debug.traceback(), function()
+		return unpack(values, 1, length)
+	end)
+end
+
+--[[
+	Cancels the promise, disallowing it from rejecting or resolving, and calls
+	the cancellation hook if provided.
+]]
+function Promise.prototype:cancel()
+	if self._status ~= Promise.Status.Started then
+		return
+	end
+
+	self._status = Promise.Status.Cancelled
+
+	if self._cancellationHook then
+		self._cancellationHook()
+	end
+
+	if self._parent then
+		self._parent:_consumerCancelled(self)
+	end
+
+	for child in pairs(self._consumers) do
+		child:cancel()
+	end
+
+	self:_finalize()
+end
+
+--[[
+	Used to decrease the number of consumers by 1, and if there are no more,
+	cancel this promise.
+]]
+function Promise.prototype:_consumerCancelled(consumer)
+	if self._status ~= Promise.Status.Started then
+		return
+	end
+
+	self._consumers[consumer] = nil
+
+	if next(self._consumers) == nil then
+		self:cancel()
+	end
+end
+
+--[[
+	Used to set a handler for when the promise resolves, rejects, or is
+	cancelled. Returns a new promise chained from this promise.
+]]
+function Promise.prototype:_finally(traceback, finallyHandler, onlyOk)
+	if not onlyOk then
+		self._unhandledRejection = false
+	end
+
+	-- Return a promise chained off of this promise
+	return Promise._new(traceback, function(resolve, reject)
+		local finallyCallback = resolve
+		if finallyHandler then
+			finallyCallback = createAdvancer(
+				traceback,
+				finallyHandler,
+				resolve,
+				reject
+			)
+		end
+
+		if onlyOk then
+			local callback = finallyCallback
+			finallyCallback = function(...)
+				if self._status == Promise.Status.Rejected then
+					return resolve(self)
+				end
+
+				return callback(...)
+			end
+		end
+
+		if self._status == Promise.Status.Started then
+			-- The promise is not settled, so queue this.
+			table.insert(self._queuedFinally, finallyCallback)
+		else
+			-- The promise already settled or was cancelled, run the callback now.
+			finallyCallback(self._status)
+		end
+	end, self)
+end
+
+function Promise.prototype:finally(finallyHandler)
+	assert(
+		finallyHandler == nil or type(finallyHandler) == "function",
+		ERROR_NON_FUNCTION:format("Promise:finally")
+	)
+	return self:_finally(debug.traceback(), finallyHandler)
+end
+
+--[[
+	Calls a callback on `finally` with specific arguments.
+]]
+function Promise.prototype:finallyCall(callback, ...)
+	assert(type(callback) == "function", ERROR_NON_FUNCTION:format("Promise:finallyCall"))
+	local length, values = pack(...)
+	return self:_finally(debug.traceback(), function()
+		return callback(unpack(values, 1, length))
+	end)
+end
+
+--[[
+	Shorthand for a finally handler that returns the given value.
+]]
+function Promise.prototype:finallyReturn(...)
+	local length, values = pack(...)
+	return self:_finally(debug.traceback(), function()
+		return unpack(values, 1, length)
+	end)
+end
+
+--[[
+	Similar to finally, except rejections are propagated through it.
+]]
+function Promise.prototype:done(finallyHandler)
+	assert(
+		finallyHandler == nil or type(finallyHandler) == "function",
+		ERROR_NON_FUNCTION:format("Promise:finallyO")
+	)
+	return self:_finally(debug.traceback(), finallyHandler, true)
+end
+
+--[[
+	Calls a callback on `done` with specific arguments.
+]]
+function Promise.prototype:doneCall(callback, ...)
+	assert(type(callback) == "function", ERROR_NON_FUNCTION:format("Promise:doneCall"))
+	local length, values = pack(...)
+	return self:_finally(debug.traceback(), function()
+		return callback(unpack(values, 1, length))
+	end, true)
+end
+
+--[[
+	Shorthand for a done handler that returns the given value.
+]]
+function Promise.prototype:doneReturn(...)
+	local length, values = pack(...)
+	return self:_finally(debug.traceback(), function()
+		return unpack(values, 1, length)
+	end, true)
+end
+
+--[[
+	Yield until the promise is completed.
+
+	This matches the execution model of normal Roblox functions.
+]]
+function Promise.prototype:awaitStatus()
+	self._unhandledRejection = false
+
+	if self._status == Promise.Status.Started then
+		local bindable = Instance.new("BindableEvent")
+
+		self:finally(function()
+			bindable:Fire()
+		end)
+
+		bindable.Event:Wait()
+		bindable:Destroy()
+	end
+
+	if self._status == Promise.Status.Resolved then
+		return self._status, unpack(self._values, 1, self._valuesLength)
+	elseif self._status == Promise.Status.Rejected then
+		return self._status, unpack(self._values, 1, self._valuesLength)
+	end
+
+	return self._status
+end
+
+local function awaitHelper(status, ...)
+	return status == Promise.Status.Resolved, ...
+end
+
+--[[
+	Calls awaitStatus internally, returns (isResolved, values...)
+]]
+function Promise.prototype:await(...)
+	return awaitHelper(self:awaitStatus(...))
+end
+
+local function expectHelper(status, ...)
+	if status ~= Promise.Status.Resolved then
+		error((...) == nil and "" or tostring((...)), 3)
+	end
+
+	return ...
+end
+
+--[[
+	Calls await and only returns if the Promise resolves.
+	Throws if the Promise rejects or gets cancelled.
+]]
+function Promise.prototype:expect(...)
+	return expectHelper(self:awaitStatus(...))
+end
+
+Promise.prototype.awaitValue = Promise.prototype.expect
+
+--[[
+	Intended for use in tests.
+
+	Similar to await(), but instead of yielding if the promise is unresolved,
+	_unwrap will throw. This indicates an assumption that a promise has
+	resolved.
+]]
+function Promise.prototype:_unwrap()
+	if self._status == Promise.Status.Started then
+		error("Promise has not resolved or rejected.", 2)
+	end
+
+	local success = self._status == Promise.Status.Resolved
+
+	return success, unpack(self._values, 1, self._valuesLength)
+end
+
+function Promise.prototype:_resolve(...)
+	if self._status ~= Promise.Status.Started then
+		if Promise.is((...)) then
+			(...):_consumerCancelled(self)
+		end
+		return
+	end
+
+	-- If the resolved value was a Promise, we chain onto it!
+	if Promise.is((...)) then
+		-- Without this warning, arguments sometimes mysteriously disappear
+		if select("#", ...) > 1 then
+			local message = (
+				"When returning a Promise from andThen, extra arguments are " ..
+				"discarded! See:\n\n%s"
+			):format(
+				self._source
+			)
+			warn(message)
+		end
+
+		local chainedPromise = ...
+
+		local promise = chainedPromise:andThen(
+			function(...)
+				self:_resolve(...)
+			end,
+			function(...)
+				-- The handler errored. Replace the inner stack trace with our outer stack trace.
+				if chainedPromise._error then
+					return self:_reject((chainedPromise._error or "") .. "\n" .. self._source)
+				end
+				self:_reject(...)
+			end
+		)
+
+		if promise._status == Promise.Status.Cancelled then
+			self:cancel()
+		elseif promise._status == Promise.Status.Started then
+			-- Adopt ourselves into promise for cancellation propagation.
+			self._parent = promise
+			promise._consumers[self] = true
+		end
+
+		return
+	end
+
+	self._status = Promise.Status.Resolved
+	self._valuesLength, self._values = pack(...)
+
+	-- We assume that these callbacks will not throw errors.
+	for _, callback in ipairs(self._queuedResolve) do
+		callback(...)
+	end
+
+	self:_finalize()
+end
+
+function Promise.prototype:_reject(...)
+	if self._status ~= Promise.Status.Started then
+		return
+	end
+
+	self._status = Promise.Status.Rejected
+	self._valuesLength, self._values = pack(...)
+
+	-- If there are any rejection handlers, call those!
+	if not isEmpty(self._queuedReject) then
+		-- We assume that these callbacks will not throw errors.
+		for _, callback in ipairs(self._queuedReject) do
+			callback(...)
+		end
+	else
+		-- At this point, no one was able to observe the error.
+		-- An error handler might still be attached if the error occurred
+		-- synchronously. We'll wait one tick, and if there are still no
+		-- observers, then we should put a message in the console.
+
+		local err = tostring((...))
+
+		coroutine.wrap(function()
+			RunService.Heartbeat:Wait()
+
+			-- Someone observed the error, hooray!
+			if not self._unhandledRejection then
+				return
+			end
+
+			-- Build a reasonable message
+			local message
+			if self._error then
+				message = ("Unhandled promise rejection:\n\n%s"):format(err)
+			else
+				message = ("Unhandled promise rejection:\n\n%s\n\n%s"):format(
+					err,
+					self._source
+				)
+			end
+			warn(message)
+		end)()
+	end
+
+	self:_finalize()
+end
+
+--[[
+	Calls any :finally handlers. We need this to be a separate method and
+	queue because we must call all of the finally callbacks upon a success,
+	failure, *and* cancellation.
+]]
+function Promise.prototype:_finalize()
+	for _, callback in ipairs(self._queuedFinally) do
+		-- Purposefully not passing values to callbacks here, as it could be the
+		-- resolved values, or rejected errors. If the developer needs the values,
+		-- they should use :andThen or :catch explicitly.
+		callback(self._status)
+	end
+
+	if self._parent and self._error == nil then
+		self._error = self._parent._error
+	end
+
+	-- Allow family to be buried
+	if not Promise.TEST then
+		self._parent = nil
+		self._consumers = nil
+	end
+end
+
+return Promise
+]]></ProtectedString>
+					<BinaryString name="Tags"></BinaryString>
+				</Properties>
+				<Item class="ModuleScript" referent="RBXBD161EF8132A446993E6097B3B0AA755">
+					<Properties>
+						<BinaryString name="AttributesSerialize"></BinaryString>
+						<Content name="LinkedSource"><null></null></Content>
+						<string name="Name">init.spec</string>
+						<string name="ScriptGuid"></string>
+						<ProtectedString name="Source"><![CDATA[return function()
+	local Promise = require(script.Parent)
+	Promise.TEST = true
+
+	local function pack(...)
+		local len = select("#", ...)
+
+		return len, { ... }
+	end
+
+	describe("Promise.Status", function()
+		it("should error if indexing nil value", function()
+			expect(function()
+				local _ = Promise.Status.wrong
+			end).to.throw()
+		end)
+	end)
+
+	describe("Promise.new", function()
+		it("should instantiate with a callback", function()
+			local promise = Promise.new(function() end)
+
+			expect(promise).to.be.ok()
+		end)
+
+		it("should invoke the given callback with resolve and reject", function()
+			local callCount = 0
+			local resolveArg
+			local rejectArg
+
+			local promise = Promise.new(function(resolve, reject)
+				callCount = callCount + 1
+				resolveArg = resolve
+				rejectArg = reject
+			end)
+
+			expect(promise).to.be.ok()
+
+			expect(callCount).to.equal(1)
+			expect(resolveArg).to.be.a("function")
+			expect(rejectArg).to.be.a("function")
+			expect(promise:getStatus()).to.equal(Promise.Status.Started)
+		end)
+
+		it("should resolve promises on resolve()", function()
+			local callCount = 0
+
+			local promise = Promise.new(function(resolve)
+				callCount = callCount + 1
+				resolve()
+			end)
+
+			expect(promise).to.be.ok()
+			expect(callCount).to.equal(1)
+			expect(promise:getStatus()).to.equal(Promise.Status.Resolved)
+		end)
+
+		it("should reject promises on reject()", function()
+			local callCount = 0
+
+			local promise = Promise.new(function(resolve, reject)
+				callCount = callCount + 1
+				reject()
+			end)
+
+			expect(promise).to.be.ok()
+			expect(callCount).to.equal(1)
+			expect(promise:getStatus()).to.equal(Promise.Status.Rejected)
+		end)
+
+		it("should reject on error in callback", function()
+			local callCount = 0
+
+			local promise = Promise.new(function()
+				callCount = callCount + 1
+				error("hahah")
+			end)
+
+			expect(promise).to.be.ok()
+			expect(callCount).to.equal(1)
+			expect(promise:getStatus()).to.equal(Promise.Status.Rejected)
+			expect(promise._values[1]:find("hahah")).to.be.ok()
+
+			-- Loosely check for the pieces of the stack trace we expect
+			expect(promise._values[1]:find("init.spec")).to.be.ok()
+			expect(promise._values[1]:find("new")).to.be.ok()
+		end)
+	end)
+
+	describe("Promise.resolve", function()
+		it("should immediately resolve with a value", function()
+			local promise = Promise.resolve(5, 6)
+
+			expect(promise).to.be.ok()
+			expect(promise:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(promise._values[1]).to.equal(5)
+			expect(promise._values[2]).to.equal(6)
+		end)
+
+		it("should chain onto passed promises", function()
+			local promise = Promise.resolve(Promise.new(function(_, reject)
+				reject(7)
+			end))
+
+			expect(promise).to.be.ok()
+			expect(promise:getStatus()).to.equal(Promise.Status.Rejected)
+			expect(promise._values[1]).to.equal(7)
+		end)
+	end)
+
+	describe("Promise.reject", function()
+		it("should immediately reject with a value", function()
+			local promise = Promise.reject(6, 7)
+
+			expect(promise).to.be.ok()
+			expect(promise:getStatus()).to.equal(Promise.Status.Rejected)
+			expect(promise._values[1]).to.equal(6)
+			expect(promise._values[2]).to.equal(7)
+		end)
+
+		it("should pass a promise as-is as an error", function()
+			local innerPromise = Promise.new(function(resolve)
+				resolve(6)
+			end)
+
+			local promise = Promise.reject(innerPromise)
+
+			expect(promise).to.be.ok()
+			expect(promise:getStatus()).to.equal(Promise.Status.Rejected)
+			expect(promise._values[1]).to.equal(innerPromise)
+		end)
+	end)
+
+	describe("Promise:andThen", function()
+		it("should chain onto resolved promises", function()
+			local args
+			local argsLength
+			local callCount = 0
+			local badCallCount = 0
+
+			local promise = Promise.resolve(5)
+
+			local chained = promise:andThen(
+				function(...)
+					argsLength, args = pack(...)
+					callCount = callCount + 1
+				end,
+				function()
+					badCallCount = badCallCount + 1
+				end
+			)
+
+			expect(badCallCount).to.equal(0)
+
+			expect(callCount).to.equal(1)
+			expect(argsLength).to.equal(1)
+			expect(args[1]).to.equal(5)
+
+			expect(promise).to.be.ok()
+			expect(promise:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(promise._values[1]).to.equal(5)
+
+			expect(chained).to.be.ok()
+			expect(chained).never.to.equal(promise)
+			expect(chained:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(#chained._values).to.equal(0)
+		end)
+
+		it("should chain onto rejected promises", function()
+			local args
+			local argsLength
+			local callCount = 0
+			local badCallCount = 0
+
+			local promise = Promise.reject(5)
+
+			local chained = promise:andThen(
+				function(...)
+					badCallCount = badCallCount + 1
+				end,
+				function(...)
+					argsLength, args = pack(...)
+					callCount = callCount + 1
+				end
+			)
+
+			expect(badCallCount).to.equal(0)
+
+			expect(callCount).to.equal(1)
+			expect(argsLength).to.equal(1)
+			expect(args[1]).to.equal(5)
+
+			expect(promise).to.be.ok()
+			expect(promise:getStatus()).to.equal(Promise.Status.Rejected)
+			expect(promise._values[1]).to.equal(5)
+
+			expect(chained).to.be.ok()
+			expect(chained).never.to.equal(promise)
+			expect(chained:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(#chained._values).to.equal(0)
+		end)
+
+		it("should chain onto asynchronously resolved promises", function()
+			local args
+			local argsLength
+			local callCount = 0
+			local badCallCount = 0
+
+			local startResolution
+			local promise = Promise.new(function(resolve)
+				startResolution = resolve
+			end)
+
+			local chained = promise:andThen(
+				function(...)
+					args = {...}
+					argsLength = select("#", ...)
+					callCount = callCount + 1
+				end,
+				function()
+					badCallCount = badCallCount + 1
+				end
+			)
+
+			expect(callCount).to.equal(0)
+			expect(badCallCount).to.equal(0)
+
+			startResolution(6)
+
+			expect(badCallCount).to.equal(0)
+
+			expect(callCount).to.equal(1)
+			expect(argsLength).to.equal(1)
+			expect(args[1]).to.equal(6)
+
+			expect(promise).to.be.ok()
+			expect(promise:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(promise._values[1]).to.equal(6)
+
+			expect(chained).to.be.ok()
+			expect(chained).never.to.equal(promise)
+			expect(chained:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(#chained._values).to.equal(0)
+		end)
+
+		it("should chain onto asynchronously rejected promises", function()
+			local args
+			local argsLength
+			local callCount = 0
+			local badCallCount = 0
+
+			local startResolution
+			local promise = Promise.new(function(_, reject)
+				startResolution = reject
+			end)
+
+			local chained = promise:andThen(
+				function()
+					badCallCount = badCallCount + 1
+				end,
+				function(...)
+					args = {...}
+					argsLength = select("#", ...)
+					callCount = callCount + 1
+				end
+			)
+
+			expect(callCount).to.equal(0)
+			expect(badCallCount).to.equal(0)
+
+			startResolution(6)
+
+			expect(badCallCount).to.equal(0)
+
+			expect(callCount).to.equal(1)
+			expect(argsLength).to.equal(1)
+			expect(args[1]).to.equal(6)
+
+			expect(promise).to.be.ok()
+			expect(promise:getStatus()).to.equal(Promise.Status.Rejected)
+			expect(promise._values[1]).to.equal(6)
+
+			expect(chained).to.be.ok()
+			expect(chained).never.to.equal(promise)
+			expect(chained:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(#chained._values).to.equal(0)
+		end)
+
+		it("should propagate errors through multiple levels", function()
+			local x, y, z
+			Promise.new(function(resolve, reject)
+				reject(1, 2, 3)
+			end)
+			:andThen(function() end)
+			:catch(function(a, b, c)
+				x, y, z = a, b, c
+			end)
+
+			expect(x).to.equal(1)
+			expect(y).to.equal(2)
+			expect(z).to.equal(3)
+		end)
+	end)
+
+	describe("Promise:cancel", function()
+		it("should mark promises as cancelled and not resolve or reject them", function()
+			local callCount = 0
+			local finallyCallCount = 0
+			local promise = Promise.new(function() end):andThen(function()
+				callCount = callCount + 1
+			end):finally(function()
+				finallyCallCount = finallyCallCount + 1
+			end)
+
+			promise:cancel()
+			promise:cancel() -- Twice to check call counts
+
+			expect(callCount).to.equal(0)
+			expect(finallyCallCount).to.equal(1)
+			expect(promise:getStatus()).to.equal(Promise.Status.Cancelled)
+		end)
+
+		it("should call the cancellation hook once", function()
+			local callCount = 0
+
+			local promise = Promise.new(function(resolve, reject, onCancel)
+				onCancel(function()
+					callCount = callCount + 1
+				end)
+			end)
+
+			promise:cancel()
+			promise:cancel() -- Twice to check call count
+
+			expect(callCount).to.equal(1)
+		end)
+
+		it("should propagate cancellations", function()
+			local promise = Promise.new(function() end)
+
+			local consumer1 = promise:andThen()
+			local consumer2 = promise:andThen()
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Started)
+			expect(consumer1:getStatus()).to.equal(Promise.Status.Started)
+			expect(consumer2:getStatus()).to.equal(Promise.Status.Started)
+
+			consumer1:cancel()
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Started)
+			expect(consumer1:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(consumer2:getStatus()).to.equal(Promise.Status.Started)
+
+			consumer2:cancel()
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(consumer1:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(consumer2:getStatus()).to.equal(Promise.Status.Cancelled)
+		end)
+
+		it("should affect downstream promises", function()
+			local promise = Promise.new(function() end)
+			local consumer = promise:andThen()
+
+			promise:cancel()
+
+			expect(consumer:getStatus()).to.equal(Promise.Status.Cancelled)
+		end)
+
+		it("should track consumers", function()
+			local pending = Promise.new(function() end)
+			local p0 = Promise.resolve()
+			local p1 = p0:finally(function() return pending end)
+			local p2 = Promise.new(function(resolve)
+				resolve(p1)
+			end)
+			local p3 = p2:andThen(function() end)
+
+			expect(p1._parent).to.never.equal(p0)
+			expect(p2._parent).to.never.equal(p1)
+			expect(p2._consumers[p3]).to.be.ok()
+			expect(p3._parent).to.equal(p2)
+		end)
+
+		it("should cancel resolved pending promises", function()
+			local p1 = Promise.new(function() end)
+
+			local p2 = Promise.new(function(resolve)
+				resolve(p1)
+			end):finally(function() end)
+
+			p2:cancel()
+
+			expect(p1._status).to.equal(Promise.Status.Cancelled)
+			expect(p2._status).to.equal(Promise.Status.Cancelled)
+		end)
+	end)
+
+	describe("Promise:finally", function()
+		it("should be called upon resolve, reject, or cancel", function()
+			local callCount = 0
+
+			local function finally()
+				callCount = callCount + 1
+			end
+
+			-- Resolved promise
+			Promise.new(function(resolve, reject)
+				resolve()
+			end):finally(finally)
+
+			-- Chained promise
+			Promise.resolve():andThen(function()
+
+			end):finally(finally):finally(finally)
+
+			-- Rejected promise
+			Promise.reject():finally(finally)
+
+			local cancelledPromise = Promise.new(function() end):finally(finally)
+			cancelledPromise:cancel()
+
+			expect(callCount).to.equal(5)
+		end)
+
+		it("should be a child of the parent Promise", function()
+			local p1 = Promise.new(function() end)
+			local p2 = p1:finally(function() end)
+
+			expect(p2._parent).to.equal(p1)
+			expect(p1._consumers[p2]).to.equal(true)
+		end)
+
+		it("should forward return values", function()
+			local value
+
+			Promise.resolve():finally(function()
+				return 1
+			end):andThen(function(v)
+				value = v
+			end)
+
+			expect(value).to.equal(1)
+		end)
+	end)
+
+	describe("Promise.all", function()
+		it("should error if given something other than a table", function()
+			expect(function()
+				Promise.all(1)
+			end).to.throw()
+		end)
+
+		it("should resolve instantly with an empty table if given no promises", function()
+			local promise = Promise.all({})
+			local success, value = promise:_unwrap()
+
+			expect(success).to.equal(true)
+			expect(promise:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(value).to.be.a("table")
+			expect(next(value)).to.equal(nil)
+		end)
+
+		it("should error if given non-promise values", function()
+			expect(function()
+				Promise.all({{}, {}, {}})
+			end).to.throw()
+		end)
+
+		it("should wait for all promises to be resolved and return their values", function()
+			local resolveFunctions = {}
+
+			local testValuesLength, testValues = pack(1, "A string", nil, false)
+
+			local promises = {}
+
+			for i = 1, testValuesLength do
+				promises[i] = Promise.new(function(resolve)
+					resolveFunctions[i] = {resolve, testValues[i]}
+				end)
+			end
+
+			local combinedPromise = Promise.all(promises)
+
+			for _, resolve in ipairs(resolveFunctions) do
+				expect(combinedPromise:getStatus()).to.equal(Promise.Status.Started)
+				resolve[1](resolve[2])
+			end
+
+			local resultLength, result = pack(combinedPromise:_unwrap())
+			local success, resolved = unpack(result, 1, resultLength)
+
+			expect(resultLength).to.equal(2)
+			expect(success).to.equal(true)
+			expect(resolved).to.be.a("table")
+			expect(#resolved).to.equal(#promises)
+
+			for i = 1, testValuesLength do
+				expect(resolved[i]).to.equal(testValues[i])
+			end
+		end)
+
+		it("should reject if any individual promise rejected", function()
+			local rejectA
+			local resolveB
+
+			local a = Promise.new(function(_, reject)
+				rejectA = reject
+			end)
+
+			local b = Promise.new(function(resolve)
+				resolveB = resolve
+			end)
+
+			local combinedPromise = Promise.all({a, b})
+
+			expect(combinedPromise:getStatus()).to.equal(Promise.Status.Started)
+
+			rejectA("baz", "qux")
+			resolveB("foo", "bar")
+
+			local resultLength, result = pack(combinedPromise:_unwrap())
+			local success, first, second = unpack(result, 1, resultLength)
+
+			expect(resultLength).to.equal(3)
+			expect(success).to.equal(false)
+			expect(first).to.equal("baz")
+			expect(second).to.equal("qux")
+			expect(b:getStatus()).to.equal(Promise.Status.Cancelled)
+		end)
+
+		it("should not resolve if resolved after rejecting", function()
+			local rejectA
+			local resolveB
+
+			local a = Promise.new(function(_, reject)
+				rejectA = reject
+			end)
+
+			local b = Promise.new(function(resolve)
+				resolveB = resolve
+			end)
+
+			local combinedPromise = Promise.all({a, b})
+
+			expect(combinedPromise:getStatus()).to.equal(Promise.Status.Started)
+
+			rejectA("baz", "qux")
+			resolveB("foo", "bar")
+
+			local resultLength, result = pack(combinedPromise:_unwrap())
+			local success, first, second = unpack(result, 1, resultLength)
+
+			expect(resultLength).to.equal(3)
+			expect(success).to.equal(false)
+			expect(first).to.equal("baz")
+			expect(second).to.equal("qux")
+		end)
+
+		it("should only reject once", function()
+			local rejectA
+			local rejectB
+
+			local a = Promise.new(function(_, reject)
+				rejectA = reject
+			end)
+
+			local b = Promise.new(function(_, reject)
+				rejectB = reject
+			end)
+
+			local combinedPromise = Promise.all({a, b})
+
+			expect(combinedPromise:getStatus()).to.equal(Promise.Status.Started)
+
+			rejectA("foo", "bar")
+
+			expect(combinedPromise:getStatus()).to.equal(Promise.Status.Rejected)
+
+			rejectB("baz", "qux")
+
+			local resultLength, result = pack(combinedPromise:_unwrap())
+			local success, first, second = unpack(result, 1, resultLength)
+
+			expect(resultLength).to.equal(3)
+			expect(success).to.equal(false)
+			expect(first).to.equal("foo")
+			expect(second).to.equal("bar")
+		end)
+
+		it("should error if a non-array table is passed in", function()
+			local ok, err = pcall(function()
+				Promise.all(Promise.new(function() end))
+			end)
+
+			expect(ok).to.be.ok()
+			expect(err:find("Non%-promise")).to.be.ok()
+		end)
+
+		it("should cancel pending promises if one rejects", function()
+			local p = Promise.new(function() end)
+			expect(Promise.all({
+				Promise.resolve(),
+				Promise.reject(),
+				p
+			}):getStatus()).to.equal(Promise.Status.Rejected)
+			expect(p:getStatus()).to.equal(Promise.Status.Cancelled)
+		end)
+
+		it("should cancel promises if it is cancelled", function()
+			local p = Promise.new(function() end)
+			p:andThen(function() end)
+
+			local promises = {
+				Promise.new(function() end),
+				Promise.new(function() end),
+				p
+			}
+
+			Promise.all(promises):cancel()
+
+			expect(promises[1]:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(promises[2]:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(promises[3]:getStatus()).to.equal(Promise.Status.Started)
+		end)
+	end)
+
+	describe("Promise.race", function()
+		it("should resolve with the first settled value", function()
+			local promise = Promise.race({
+				Promise.resolve(1),
+				Promise.resolve(2)
+			}):andThen(function(value)
+				expect(value).to.equal(1)
+			end)
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Resolved)
+		end)
+
+		it("should cancel other promises", function()
+			local promise = Promise.new(function() end)
+			promise:andThen(function() end)
+			local promises = {
+				promise,
+				Promise.new(function() end),
+				Promise.new(function(resolve)
+					resolve(2)
+				end)
+			}
+
+			local promise = Promise.race(promises)
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(promise._values[1]).to.equal(2)
+			expect(promises[1]:getStatus()).to.equal(Promise.Status.Started)
+			expect(promises[2]:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(promises[3]:getStatus()).to.equal(Promise.Status.Resolved)
+
+			local p = Promise.new(function() end)
+			expect(Promise.race({
+				Promise.reject(),
+				Promise.resolve(),
+				p
+			}):getStatus()).to.equal(Promise.Status.Rejected)
+			expect(p:getStatus()).to.equal(Promise.Status.Cancelled)
+		end)
+
+		it("should error if a non-array table is passed in", function()
+			local ok, err = pcall(function()
+				Promise.race(Promise.new(function() end))
+			end)
+
+			expect(ok).to.be.ok()
+			expect(err:find("Non%-promise")).to.be.ok()
+		end)
+
+		it("should cancel promises if it is cancelled", function()
+			local p = Promise.new(function() end)
+			p:andThen(function() end)
+
+			local promises = {
+				Promise.new(function() end),
+				Promise.new(function() end),
+				p
+			}
+
+			Promise.race(promises):cancel()
+
+			expect(promises[1]:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(promises[2]:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(promises[3]:getStatus()).to.equal(Promise.Status.Started)
+		end)
+	end)
+
+	describe("Promise.promisify", function()
+		it("should wrap functions", function()
+			local function test(n)
+				return n + 1
+			end
+
+			local promisified = Promise.promisify(test)
+			local status, result = promisified(1):awaitStatus()
+
+			expect(status).to.equal(Promise.Status.Resolved)
+			expect(result).to.equal(2)
+		end)
+
+		it("should catch errors after a yield", function()
+			local bindable = Instance.new("BindableEvent")
+			local test = Promise.promisify(function ()
+				bindable.Event:Wait()
+				error('errortext')
+			end)
+
+			local promise = test()
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Started)
+			bindable:Fire()
+			expect(promise:getStatus()).to.equal(Promise.Status.Rejected)
+			expect(promise._values[1]:find("errortext")).to.be.ok()
+		end)
+	end)
+
+	describe("Promise.tap", function()
+		it("should thread through values", function()
+			local first, second
+
+			Promise.resolve(1)
+				:andThen(function(v)
+					return v + 1
+				end)
+				:tap(function(v)
+					first = v
+					return v + 1
+				end)
+				:andThen(function(v)
+					second = v
+				end)
+
+			expect(first).to.equal(2)
+			expect(second).to.equal(2)
+		end)
+
+		it("should chain onto promises", function()
+			local resolveInner, finalValue
+
+			local promise = Promise.resolve(1)
+				:tap(function()
+					return Promise.new(function(resolve)
+						resolveInner = resolve
+					end)
+				end)
+				:andThen(function(v)
+					finalValue = v
+				end)
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Started)
+			expect(finalValue).to.never.be.ok()
+
+			resolveInner(1)
+
+			expect(promise:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(finalValue).to.equal(1)
+		end)
+	end)
+
+	describe("Promise.try", function()
+		it("should catch synchronous errors", function()
+			local errorText
+			Promise.try(function()
+				error('errortext')
+			end):catch(function(e)
+				errorText = e
+			end)
+
+			expect(errorText:find("errortext")).to.be.ok()
+		end)
+	end)
+
+	describe("Promise:andThenReturn", function()
+		it("should return the given values", function()
+			local value1, value2
+
+			Promise.resolve():andThenReturn(1, 2):andThen(function(one, two)
+				value1 = one
+				value2 = two
+			end)
+
+			expect(value1).to.equal(1)
+			expect(value2).to.equal(2)
+		end)
+	end)
+
+	describe("Promise:doneReturn", function()
+		it("should return the given values", function()
+			local value1, value2
+
+			Promise.resolve():doneReturn(1, 2):andThen(function(one, two)
+				value1 = one
+				value2 = two
+			end)
+
+			expect(value1).to.equal(1)
+			expect(value2).to.equal(2)
+		end)
+	end)
+
+	describe("Promise:andThenCall", function()
+		it("should call the given function with arguments", function()
+			local value1, value2
+			Promise.resolve():andThenCall(function(a, b)
+				value1 = a
+				value2 = b
+			end, 3, 4)
+
+			expect(value1).to.equal(3)
+			expect(value2).to.equal(4)
+		end)
+	end)
+
+	describe("Promise:doneCall", function()
+		it("should call the given function with arguments", function()
+			local value1, value2
+			Promise.resolve():doneCall(function(a, b)
+				value1 = a
+				value2 = b
+			end, 3, 4)
+
+			expect(value1).to.equal(3)
+			expect(value2).to.equal(4)
+		end)
+	end)
+
+	describe("Promise:done", function()
+		it("should trigger on resolve or cancel", function()
+			local promise = Promise.new(function() end)
+			local value
+
+			local p = promise:done(function()
+				value = true
+			end)
+
+			expect(value).to.never.be.ok()
+			promise:cancel()
+			expect(p:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(value).to.equal(true)
+
+			local never, always
+			Promise.reject():done(function()
+				never = true
+			end):finally(function()
+				always = true
+			end)
+
+			expect(never).to.never.be.ok()
+			expect(always).to.be.ok()
+		end)
+	end)
+
+	describe("Promise.some", function()
+		it("should resolve once the goal is reached", function()
+			local p = Promise.some({
+				Promise.resolve(1),
+				Promise.reject(),
+				Promise.resolve(2)
+			}, 2)
+			expect(p:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(p._values[1][1]).to.equal(1)
+			expect(p._values[1][2]).to.equal(2)
+		end)
+
+		it("should error if the goal can't be reached", function()
+			expect(Promise.some({
+				Promise.resolve(),
+				Promise.reject()
+			}, 2):getStatus()).to.equal(Promise.Status.Rejected)
+
+			local reject
+			local p = Promise.some({
+				Promise.resolve(),
+				Promise.new(function(_, r) reject = r end)
+			}, 2)
+
+			expect(p:getStatus()).to.equal(Promise.Status.Started)
+			reject("foo")
+			expect(p:getStatus()).to.equal(Promise.Status.Rejected)
+			expect(p._values[1]).to.equal("foo")
+		end)
+
+		it("should cancel pending Promises once the goal is reached", function()
+			local resolve
+			local pending1 = Promise.new(function() end)
+			local pending2 = Promise.new(function(r) resolve = r end)
+
+			local some = Promise.some({
+				pending1,
+				pending2,
+				Promise.resolve()
+			}, 2)
+
+			expect(some:getStatus()).to.equal(Promise.Status.Started)
+			expect(pending1:getStatus()).to.equal(Promise.Status.Started)
+			expect(pending2:getStatus()).to.equal(Promise.Status.Started)
+
+			resolve()
+
+			expect(some:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(pending1:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(pending2:getStatus()).to.equal(Promise.Status.Resolved)
+		end)
+
+		it("should error if passed a non-number", function()
+			expect(function()
+				Promise.some({}, "non-number")
+			end).to.throw()
+		end)
+
+		it("should return an empty array if amount is 0", function()
+			local p = Promise.some({
+				Promise.resolve(2)
+			}, 0)
+
+			expect(p:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(#p._values[1]).to.equal(0)
+		end)
+
+		it("should not return extra values", function()
+			local p = Promise.some({
+				Promise.resolve(1),
+				Promise.resolve(2),
+				Promise.resolve(3),
+				Promise.resolve(4),
+			}, 2)
+
+			expect(p:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(#p._values[1]).to.equal(2)
+			expect(p._values[1][1]).to.equal(1)
+			expect(p._values[1][2]).to.equal(2)
+		end)
+
+		it("should cancel promises if it is cancelled", function()
+			local p = Promise.new(function() end)
+			p:andThen(function() end)
+
+			local promises = {
+				Promise.new(function() end),
+				Promise.new(function() end),
+				p
+			}
+
+			Promise.some(promises, 3):cancel()
+
+			expect(promises[1]:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(promises[2]:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(promises[3]:getStatus()).to.equal(Promise.Status.Started)
+		end)
+
+		describe("Promise.any", function()
+			it("should return the value directly", function()
+				local p = Promise.any({
+					Promise.reject(),
+					Promise.reject(),
+					Promise.resolve(1)
+				})
+
+				expect(p:getStatus()).to.equal(Promise.Status.Resolved)
+				expect(p._values[1]).to.equal(1)
+			end)
+
+			it("should error if all are rejected", function()
+				expect(Promise.any({
+					Promise.reject(),
+					Promise.reject(),
+					Promise.reject(),
+				}):getStatus()).to.equal(Promise.Status.Rejected)
+			end)
+		end)
+	end)
+
+	describe("Promise.allSettled", function()
+		it("should resolve with an array of PromiseStatuses", function()
+			local reject
+			local p = Promise.allSettled({
+				Promise.resolve(),
+				Promise.reject(),
+				Promise.resolve(),
+				Promise.new(function(_, r) reject = r end)
+			})
+
+			expect(p:getStatus()).to.equal(Promise.Status.Started)
+			reject()
+			expect(p:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(p._values[1][1]).to.equal(Promise.Status.Resolved)
+			expect(p._values[1][2]).to.equal(Promise.Status.Rejected)
+			expect(p._values[1][3]).to.equal(Promise.Status.Resolved)
+			expect(p._values[1][4]).to.equal(Promise.Status.Rejected)
+		end)
+
+		it("should cancel promises if it is cancelled", function()
+			local p = Promise.new(function() end)
+			p:andThen(function() end)
+
+			local promises = {
+				Promise.new(function() end),
+				Promise.new(function() end),
+				p
+			}
+
+			Promise.allSettled(promises):cancel()
+
+			expect(promises[1]:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(promises[2]:getStatus()).to.equal(Promise.Status.Cancelled)
+			expect(promises[3]:getStatus()).to.equal(Promise.Status.Started)
+		end)
+	end)
+end]]></ProtectedString>
+						<BinaryString name="Tags"></BinaryString>
+					</Properties>
+				</Item>
+			</Item>
+		</Item>
+	</Item>
+</roblox>
