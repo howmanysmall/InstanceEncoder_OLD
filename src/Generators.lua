@@ -56,16 +56,16 @@ function Generators.GenerateMDEnum()
 	local MDEnum = {}
 
 	for _, Enumeration in ipairs(Dump.Enums) do
-		local EnumTable = {
-			EnumName = Enumeration.Name;
-			ValueMap = {};
-		}
+		local ValueMap = {}
 
 		for _, Value in ipairs(Enumeration.Items) do
-			EnumTable.ValueMap[Value.Name] = true
+			ValueMap[Value.Name] = true
 		end
 
-		MDEnum[Enumeration.Name] = EnumTable
+		MDEnum[Enumeration.Name] = {
+			EnumName = Enumeration.Name;
+			ValueMap = ValueMap;
+		}
 	end
 
 	return MDEnum
