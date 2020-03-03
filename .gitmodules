@@ -1,0 +1,12 @@
+[submodule "lib\\DumpParser"]
+	path = lib\\DumpParser
+	url = https://github.com/ClockworkSquirrel/roblox-dump-parser.git
+[submodule "lib\\Request"]
+	path = lib\\Request
+	url = https://github.com/ClockworkSquirrel/request.git
+[submodule "lib/FastBitBuffer"]
+	path = lib/FastBitBuffer
+	url = https://github.com/howmanysmall/FastBitBuffer.git
+[submodule "lib/Promise"]
+	path = lib/Promise
+	url = https://github.com/evaera/roblox-lua-promise.git

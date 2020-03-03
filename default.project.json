@@ -1,0 +1,33 @@
+{
+	"name": "instance-encoder",
+	"tree": {
+		"$className": "DataModel",
+		"HttpService": {
+			"$className": "HttpService",
+			"$properties": {
+				"HttpEnabled": true
+			}
+		},
+
+		"ServerStorage": {
+			"$className": "ServerStorage",
+			"InstanceEncoder": {
+				"$path": "src",
+				"Request": {
+					"$path": "lib/request/src",
+					"Promise": {
+						"$path": "lib/Promise/lib"
+					}
+				},
+
+				"BitBuffer": {
+					"$path": "lib/FastBitBuffer/src"
+				},
+
+				"DumpParser": {
+					"$path": "lib/DumpParser/src"
+				}
+			}
+		}
+	}
+}
